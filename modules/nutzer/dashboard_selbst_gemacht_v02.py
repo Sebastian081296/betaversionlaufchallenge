@@ -1487,7 +1487,7 @@ def show_dashboard():
         import base64
         from datetime import datetime
         
-        challenge_start = st.session_state.get("CHALLENGE_START_DATETIME", datetime.now())
+        challenge_start = st.session_state.get("CHALLENGE_START")
         challenge_started = challenge_start and datetime.now() >= challenge_start
     
         user = st.session_state.get("user")
@@ -1542,12 +1542,6 @@ def show_dashboard():
                     "📸 Beweisbild (Screenshot / Foto vom Laufband)",
                     type=["png", "jpg", "jpeg"]
                 )
-                
-                comment = st.text_area(
-                "💬 Bei anderen Aktivitäten als klassischen Läufen hier bitte kurz vermerken um welche Aktivität es sich handelt",
-                placeholder="z. B. Hallenkick",
-                max_chars=300
-                )
     
                 submit = st.form_submit_button("Eintragen")
                 
@@ -1599,7 +1593,6 @@ def show_dashboard():
                     "dist": dist_m,
                     "duration": total_seconds,
                     "time": datetime.now(),
-                    "comment": comment.strip() if comment else "",   # 👈 NEU
                     "proof_image": {
                         "name": proof_image.name,
                         "type": proof_image.type,
@@ -1630,64 +1623,53 @@ def show_dashboard():
         from datetime import datetime
     
         with st.form(f"edit_form_{user}_{run_index}"):
-            dist_km = st.number_input(
-                "Distanz (km)",
-                min_value=0.0,
-                step=0.1,
-                value=run["dist"] / 1000
-            )
-    
+            dist_km = st.number_input("Distanz (km)", min_value=0.0, step=0.1, value=run["dist"]/1000)
             duration = run.get("duration", 0)
-            minutes = st.number_input("Minuten", min_value=0, step=1, value=duration // 60)
-            seconds = st.number_input("Sekunden", min_value=0, max_value=59, step=1, value=duration % 60)
+            minutes = st.number_input("Minuten", min_value=0, step=1, value=duration//60)
+            seconds = st.number_input("Sekunden", min_value=0, max_value=59, step=1, value=duration%60)
     
-            # ✅ EDITIERBARER KOMMENTAR
-            comment = st.text_area(
-                "💬 Kommentar",
-                value=run.get("comment", ""),
-                max_chars=300
-            )
-    
+            # Vorhandenes Bild anzeigen
             proof = run.get("proof_image")
             if proof and "data" in proof:
                 image_bytes = base64.b64decode(proof["data"])
                 st.image(image_bytes, caption=f"Aktuelles Beweisbild – {proof.get('name','')}")
     
-            proof_image = st.file_uploader(
-                "📸 Neues Beweisbild (optional)",
-                type=["png", "jpg", "jpeg"]
-            )
+            # Optionales neues Bild
+            proof_image = st.file_uploader("📸 Neues Beweisbild (optional)", type=["png", "jpg", "jpeg"])
     
             submit = st.form_submit_button("Speichern")
-            if submit:
-                total_seconds = minutes * 60 + seconds
-                dist_m = int(dist_km * 1000)
-        
-                runs_by_user = load_runs()
-                run_entry = runs_by_user[user][run_index]
-        
-                run_entry["dist"] = dist_m
-                run_entry["duration"] = total_seconds
-                run_entry["comment"] = comment.strip() if comment else ""
-                run_entry["time"] = datetime.now()
-        
-                if proof_image is not None:
-                    image_b64 = base64.b64encode(proof_image.read()).decode("utf-8")
-                    run_entry["proof_image"] = {
-                        "name": proof_image.name,
-                        "type": proof_image.type,
-                        "data": image_b64
-                    }
-        
-                if not admin:
-                    run_entry["editable"] = True
-        
-                save_runs(runs_by_user)
-        
-                st.success("✅ Lauf erfolgreich bearbeitet!")
-                st.session_state["edit_run_index"] = None
-                st.session_state["edit_run_user"] = None
-                st.rerun()
+    
+        if submit:
+            total_seconds = minutes * 60 + seconds
+            dist_m = int(dist_km * 1000)
+            runs_by_user = load_runs()
+            runs_by_user[user][run_index]["dist"] = dist_m
+            runs_by_user[user][run_index]["duration"] = total_seconds
+            
+            # ... speichere Änderungen ...
+            save_runs(runs_by_user)
+            st.success("Lauf erfolgreich bearbeitet!")
+            # Formular schließen
+            st.session_state["edit_run_index"] = None
+            st.session_state["edit_run_user"] = None
+            st.rerun()
+
+    
+            # Nur überschreiben, wenn neues Bild hochgeladen wird
+            if proof_image is not None:
+                image_b64 = base64.b64encode(proof_image.read()).decode("utf-8")
+                runs_by_user[user][run_index]["proof_image"] = {
+                    "name": proof_image.name,
+                    "type": proof_image.type,
+                    "data": image_b64
+                }
+    
+            if not admin:
+                runs_by_user[user][run_index]["editable"] = True
+    
+            save_runs(runs_by_user)
+            st.success("Lauf erfolgreich bearbeitet!")
+            st.rerun()
 
 
 
@@ -1782,22 +1764,6 @@ def show_dashboard():
             st.markdown(
                 f"**#{i}** 📅 {run_time.strftime('%d.%m.%Y %H:%M')} 📏 **{dist_km:.2f} km** ⏱ **{minutes}:{seconds:02d} min**"
             )
-            run_comment = run.get("comment", "").strip()
-            if run_comment:
-                st.markdown(
-                    f"""
-                    <div style="
-                        background: rgba(255,255,255,0.08);
-                        padding: 8px 12px;
-                        border-radius: 8px;
-                        margin-top: 6px;
-                        font-size: 0.85em;
-                    ">
-                        💬 {escape_html(run_comment)}
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
     
             proof = run.get("proof_image")
             if proof and "data" in proof:
@@ -1829,7 +1795,6 @@ def show_dashboard():
                 if st.button(f"Lauf #{i} bearbeiten", key=f"edit_user_{i}"):
                     st.session_state["edit_run_index"] = i-1
                     st.session_state["edit_run_user"] = norm_user
-                    st.rerun()
     
             # **Formular direkt unter dem aktuellen Lauf anzeigen**
             if edit_index == i-1 and edit_user == norm_user:
@@ -2286,97 +2251,69 @@ def show_admin_page():
         from datetime import datetime
     
         with st.form(f"edit_form_{user}_{run_index}"):
-            dist_km = st.number_input(
-                "Distanz (km)",
-                min_value=0.0,
-                step=0.1,
-                value=run["dist"] / 1000
-            )
-    
+            dist_km = st.number_input("Distanz (km)", min_value=0.0, step=0.1, value=run["dist"]/1000)
             duration = run.get("duration", 0)
-            minutes = st.number_input("Minuten", min_value=0, step=1, value=duration // 60)
-            seconds = st.number_input("Sekunden", min_value=0, max_value=59, step=1, value=duration % 60)
+            minutes = st.number_input("Minuten", min_value=0, step=1, value=duration//60)
+            seconds = st.number_input("Sekunden", min_value=0, max_value=59, step=1, value=duration%60)
     
-            # ✅ EDITIERBARER KOMMENTAR
-            comment = st.text_area(
-                "💬 Kommentar",
-                value=run.get("comment", ""),
-                max_chars=300
-            )
-    
+            # Vorhandenes Bild anzeigen
             proof = run.get("proof_image")
             if proof and "data" in proof:
                 image_bytes = base64.b64decode(proof["data"])
                 st.image(image_bytes, caption=f"Aktuelles Beweisbild – {proof.get('name','')}")
     
-            proof_image = st.file_uploader(
-                "📸 Neues Beweisbild (optional)",
-                type=["png", "jpg", "jpeg"]
-            )
+            # Optionales neues Bild
+            proof_image = st.file_uploader("📸 Neues Beweisbild (optional)", type=["png", "jpg", "jpeg"])
     
             submit = st.form_submit_button("Speichern")
     
         if submit:
             total_seconds = minutes * 60 + seconds
             dist_m = int(dist_km * 1000)
-    
             runs_by_user = load_runs()
-            run_entry = runs_by_user[user][run_index]
+            runs_by_user[user][run_index]["dist"] = dist_m
+            runs_by_user[user][run_index]["duration"] = total_seconds
+            
+            # ... speichere Änderungen ...
+            save_runs(runs_by_user)
+            st.success("Lauf erfolgreich bearbeitet!")
+            # Formular schließen
+            st.session_state["edit_run_index"] = None
+            st.session_state["edit_run_user"] = None
+            st.rerun()
+
     
-            run_entry["dist"] = dist_m
-            run_entry["duration"] = total_seconds
-            run_entry["comment"] = comment.strip() if comment else ""
-            run_entry["time"] = datetime.now()
-    
+            # Nur überschreiben, wenn neues Bild hochgeladen wird
             if proof_image is not None:
                 image_b64 = base64.b64encode(proof_image.read()).decode("utf-8")
-                run_entry["proof_image"] = {
+                runs_by_user[user][run_index]["proof_image"] = {
                     "name": proof_image.name,
                     "type": proof_image.type,
                     "data": image_b64
                 }
     
             if not admin:
-                run_entry["editable"] = True
+                runs_by_user[user][run_index]["editable"] = True
     
             save_runs(runs_by_user)
-    
-            st.success("✅ Lauf erfolgreich bearbeitet!")
-            st.session_state["edit_run_index"] = None
-            st.session_state["edit_run_user"] = None
-            st.session_state[f"expander_open_{user}"] = True
+            st.success("Lauf erfolgreich bearbeitet!")
             st.rerun()
-
-
     
     def show_admin_runs_overview():
         import base64
-        from datetime import datetime
-    
+
         st.markdown("### 🏃 Eingetragene Läufe aller Nutzer")
-    
         runs_by_user = load_runs()
         dt_start, dt_end = get_challenge_start_end()
     
-        edit_user = st.session_state.get("admin_edit_user")
-        edit_index = st.session_state.get("admin_edit_run_index")
-    
         for username, runs in runs_by_user.items():
-            if not runs:
-                continue
-    
-            expander_key = f"expander_open_{username}"
-
-            with st.expander(
-                f"👤 {username} ({len(runs)} Läufe)",
-                expanded=st.session_state.get(expander_key, False)
-            ):
-
+            if not runs: continue
+            with st.expander(f"👤 {username} ({len(runs)} Läufe)", expanded=False):
                 for i, run in enumerate(runs, start=1):
                     run_time = run.get("time")
                     if isinstance(run_time, str):
+                        from datetime import datetime
                         run_time = datetime.fromisoformat(run_time)
-    
                     if not (dt_start <= run_time <= dt_end):
                         continue
     
@@ -2387,90 +2324,51 @@ def show_admin_page():
                     admin_confirmed = run.get("admin_confirmed", False)
     
                     st.markdown(
-                        f"**#{i}** 📅 {run_time.strftime('%d.%m.%Y %H:%M')} "
-                        f"📏 **{dist_km:.2f} km** ⏱ **{minutes}:{seconds:02d} min**"
+                        f"**#{i}** 📅 {run_time.strftime('%d.%m.%Y %H:%M')} 📏 **{dist_km:.2f} km** ⏱ **{minutes}:{seconds:02d} min**"
                     )
     
-                    # Beweisbild
                     proof = run.get("proof_image")
                     if proof and "data" in proof:
                         image_bytes = base64.b64decode(proof["data"])
                         st.image(image_bytes, caption=f"Beweisbild – {proof.get('name','')}")
-    
-                    # -------------------------
-                    # ✏️ Bearbeiten / Wechseln
-                    # -------------------------
-
-                    if st.button(
-                        f"✏️ Lauf #{i} bearbeiten",
-                        key=f"edit_admin_{username}_{i}"
-                    ):
-                        st.session_state["admin_edit_user"] = username
-                        st.session_state["admin_edit_run_index"] = i - 1
-                        st.session_state[f"expander_open_{username}"] = True
-                    
-                        # 👇 Scroll-Ziel merken
-                        st.session_state["scroll_to"] = f"scroll_target_{username}_{i}"
-                    
-                        st.rerun()
 
     
-                    # -------------------------
-                    # Edit-Formular DIREKT UNTER DEM LAUF
-                    # -------------------------
-                    anchor_id = f"scroll_target_{username}_{i}"
-
-                    # unsichtbarer HTML-Anker
-                    components.html(
-                        f'<div id="{anchor_id}"></div>',
-                        height=0
-                    )
-                    if edit_user == username and edit_index == i - 1:
-                        st.markdown("#### ✏️ Lauf bearbeiten (Admin)")
-                        edit_run_form(
-                            user=username,
-                            run_index=i - 1,
-                            run=run,
-                            admin=True
-                        )
+                    # Admin kann bearbeiten
+                    if st.button(f"Lauf #{i} bearbeiten", key=f"edit_admin_{username}_{i}"):
+                        edit_run_form(username, i-1, run, admin=True)
     
-                    # -------------------------
-                    # ✅ Bestätigen
-                    # -------------------------
+                    # Admin kann bestätigen
                     if not admin_confirmed:
-                        if st.button(
-                            f"✅ Lauf #{i} bestätigen",
-                            key=f"confirm_{username}_{i}"
-                        ):
-                            runs_by_user[username][i - 1]["admin_confirmed"] = True
-                            runs_by_user[username][i - 1]["editable"] = False
+                        if st.button(f"✅ Lauf #{i} bestätigen", key=f"confirm_{username}_{i}"):
+                            runs_by_user[username][i-1]["admin_confirmed"] = True
+                            runs_by_user[username][i-1]["editable"] = False
                             save_runs(runs_by_user)
                             st.success("Lauf bestätigt!")
                             st.rerun()
-                    else:
+    
+                    elif admin_confirmed:
+
                         st.markdown(
-                            """
-                            <div style="
-                                background-color: #011848;
-                                color: #ffffff;
-                                padding: 12px 16px;
-                                border-radius: 10px;
-                                font-weight: 600;
-                                display: flex;
-                                align-items: center;
-                                gap: 8px;
-                                box-shadow: 0 4px 12px rgba(0,0,0,0.25);
-                            ">
-                                <span style="font-size: 1.2em;">ℹ️</span>
-                                <span>✅ Bestätigt</span>
-                            </div>
-                            """,
-                            unsafe_allow_html=True
+                        """
+                        <div style="
+                            background-color: #011848;
+                            color: #ffffff;
+                            padding: 12px 16px;
+                            border-radius: 10px;
+                            font-weight: 600;
+                            display: flex;
+                            align-items: center;
+                            gap: 8px;
+                            box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+                        ">
+                            <span style="font-size: 1.2em;">ℹ️</span>
+                            <span>✅ Bestätigt</span>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
                         )
     
                     st.divider()
-
-
     
     def admin_module():
         if not is_admin():
