@@ -1,23 +1,23 @@
 {
-  "WOCHENNUMMER": 0,
-  "WOCHENZIEL": 6000,
+  "WOCHENNUMMER": 3,
+  "WOCHENZIEL": 10000,
   "BATTERIE_SCHWELLE": 80,
-  "CHALLENGE_START_DATETIME": "2026-01-04T00:00:00",
-  "CHALLENGE_END_DATETIME": "2026-01-12T00:00:00",
-  "TEAMZIEL_WOCHEN_ERREICHT": 0,
-  "admin_info_text": "Hallo zusammen,\n\nwir starten nun mit der Laufchallenge. Die Regeln für die erste Woche sind einfach und stehen unter dem Motto: Je mehr ihr lauft, desto besser.\n\n- Eure Aktivitäten könnt ihr über den Button „Neuen Lauf eintragen“ erfassen. Neben klassischen Läufen sind auch andere Aktivitäten erlaubt (z. B. Padel-Tennis, Squash, Hallenkick), sofern ihr die zurückgelegte Distanz während der Aktivität mit einem geeigneten Medium eurer Wahl aufzeichnet und einen Screenshot oder ein Foto als Nachweis hochladet. Finden Aktivitäten mit mehreren Teilnehmern statt, benötigt jeder Teilnehmer einen eigenen Nachweis. Hinweise wie „Frag Max Mustermann, der kann das bestätigen“ werden nicht akzeptiert.\n\n- Die Laufrangliste wird auf Basis der gesamten zurückgelegten Distanz der Woche erstellt. Alle Aktivitäten der Woche werden zusammengerechnet. Sollte es wider Erwarten zu einem Gleichstand kommen, entscheidet die Durchschnittsgeschwindigkeit der jeweils schnellsten Aktivität.\n\n- Auf Grundlage der Laufrangliste wird nach jeder Woche eine Lotterie durchgeführt, über die der jeweilige Wochenpreis vergeben wird. Je höher eure Platzierung in der Rangliste, desto größer ist eure Gewinnchance. Die Preise der aktuellen Wochenchallenge findet ihr im Lotterie-Reiter. Die Lotterie zur ersten Wochen-Challenge findet am 12.01 um 20:00 Uhr statt. \n\n- Erreichen in JEDER Woche mindestens 80 % der Spieler das jeweilige Mindestwochziel, gibt es in der Vorbereitung eine Team-Belohnung. In der ersten Woche beträgt das Mindestwochziel 6 km pro Spieler.\n\n- Die Top 3 der Woche werden auf Instagram bekannt gegeben und als Lauf-MVPs ausgezeichnet.\n\n- Da wir ein Team sind – und die Viel-Läufer während der Runde vermutlich auch für die Spieler am Ende der Rangliste mitlaufen müssen – organisieren die drei letztplatzierten Spieler jeweils ein Essen für die Mannschaft in der Vorbereitung. Die letzten Drei der ersten Woche sind entsprechend in der ersten Vorbereitungswoche an der Reihe.\n\n- Krankheits- oder Verletzungsfälle bitte vor Beginn der jeweiligen Woche bei den Coaches melden, damit eine valide Rangliste erstellt werden kann. Abmeldungen während einer laufenden Wochenchallenge können für die betreffende Woche nicht berücksichtigt werden – andernfalls könnte sich auf den hinteren Plätzen plötzlich ein hochinfektiöses Virus ausbreiten.",
+  "CHALLENGE_START_DATETIME": "2026-01-05T00:00:00",
+  "CHALLENGE_END_DATETIME": "2026-01-26T00:00:00",
+  "TEAMZIEL_WOCHEN_ERREICHT": 2,
+  "admin_info_text": "Hallo zusammen,\n\ndie Regeln der dritten Woche der Laufchallenge bleiben in großen Teilen unverändert, stehen nun jedoch unter einem leicht angepassten Fokus: Nicht nur die Distanz, sondern auch das Tempo entscheidet.\n\n-Eure Aktivitäten könnt ihr weiterhin über den Button „Neuen Lauf eintragen“ erfassen. Neben klassischen Läufen sind auch andere Aktivitäten erlaubt (z. B. Padel-Tennis, Squash, Hallenkick), sofern ihr die zurückgelegte Distanz während der Aktivität mit einem geeigneten Medium eurer Wahl aufzeichnet und einen Screenshot oder ein Foto als Nachweis hochladet. Finden Aktivitäten mit mehreren Teilnehmern statt, benötigt jeder Teilnehmer einen eigenen Nachweis. Hinweise wie „Frag Max Mustermann, der kann das bestätigen“ werden nicht akzeptiert.\n\n-Die Laufrangliste wird ab dieser Woche auf Basis der erreichten Speed-Punkte erstellt. Berücksichtigt werden ausschließlich Aktivitäten mit einer Mindestdistanz von 2 km, wobei pro Aktivität maximal 6 km angerechnet werden. Die Speed-Punkte ergeben sich aus dem Produkt der angerechneten Distanz (in km) und der Durchschnittsgeschwindigkeit (in km/h). Sollte es wider Erwarten zu einem Gleichstand kommen, entscheidet weiterhin die höchste Durchschnittsgeschwindigkeit einer einzelnen Aktivität.\n\n-Auf Grundlage der Laufrangliste wird nach jeder Woche eine Lotterie durchgeführt, über die der jeweilige Wochenpreis vergeben wird. Je höher eure Platzierung in der Rangliste, desto größer ist eure Gewinnchance. Die Preise der aktuellen Wochenchallenge findet ihr im Lotterie-Reiter. Die Lotterie zur dritten Wochen-Challenge findet am 26.01.2026 um 20:00 Uhr statt.\n\n-Erreichen in JEDER Woche mindestens 80 % der Spieler das jeweilige Mindestwochenziel, gibt es in der Vorbereitung eine Team-Belohnung. In der dritten Woche beträgt das Mindestwochenziel weiterhin 8 km pro Spieler. Ausschlaggebend ist hierbei – unverändert – die tatsächlich gelaufene Gesamtdistanz ohne Mindestdistanz und ohne Begrenzung auf 6 km.\n\n-Die Top 3 der Woche werden auf Instagram bekannt gegeben und als Lauf-MVPs ausgezeichnet.\n\n-Da wir ein Team sind – und die Viel-Läufer während der Runde vermutlich auch für die Spieler am Ende der Rangliste mitlaufen müssen – organisieren die drei letztplatzierten Spieler jeweils ein Essen für die Mannschaft in der Vorbereitung. Die letzten Drei der zweiten Woche sind in der dritten Vorbereitungswoche an der Reihe.\n\n-Krankheits- oder Verletzungsfälle bitte vor Beginn der jeweiligen Woche bei den Coaches melden, damit eine valide Rangliste erstellt werden kann. Abmeldungen während einer laufenden Wochenchallenge können für die betreffende Woche nicht berücksichtigt werden – andernfalls könnte sich auf den hinteren Plätzen plötzlich ein hochinfektiöses Virus ausbreiten.\n\n",
   "lotterie_preise": [
     {
       "icon": "🎁",
-      "text": "Sportartikel-Gutschein 30€"
+      "text": "Fitness-Smartwatch (ca. 40 €)"
     },
     {
       "icon": "🎁",
-      "text": "Mawell-Gutschein 30€"
+      "text": "TSV-Hoodie (ca. 40 €)"
     },
     {
       "icon": "🎁",
-      "text": "VH-Gutschein 50€"
+      "text": "VH-Gutschein 40€"
     }
   ],
   "active_users_this_week": [
@@ -39,5 +39,6 @@
     "Nico",
     "Sebastian",
     "Weso"
-  ]
+  ],
+  "RANKING_MODE": "speed_points"
 }

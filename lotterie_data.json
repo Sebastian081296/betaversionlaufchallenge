@@ -1,0 +1,65 @@
+{
+  "teilnehmer": [
+    {
+      "name": "Danny",
+      "chance": 25.0
+    },
+    {
+      "name": "Sebastian",
+      "chance": 17.5
+    },
+    {
+      "name": "Julen",
+      "chance": 12.5
+    },
+    {
+      "name": "LucaD",
+      "chance": 8.0
+    },
+    {
+      "name": "Wieso",
+      "chance": 7.0
+    },
+    {
+      "name": "Marc",
+      "chance": 6.0
+    },
+    {
+      "name": "Matthi",
+      "chance": 5.0
+    },
+    {
+      "name": "Cris",
+      "chance": 4.0
+    },
+    {
+      "name": "Elias",
+      "chance": 3.0
+    },
+    {
+      "name": "Levin",
+      "chance": 2.0
+    },
+    {
+      "name": "LukasM",
+      "chance": 2.0
+    },
+    {
+      "name": "LucaT",
+      "chance": 2.0
+    },
+    {
+      "name": "Nico",
+      "chance": 2.0
+    },
+    {
+      "name": "Fabio",
+      "chance": 2.0
+    },
+    {
+      "name": "LukasH",
+      "chance": 2.0
+    }
+  ],
+  "week_nr": 2
+}

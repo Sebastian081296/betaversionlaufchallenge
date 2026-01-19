@@ -6,20 +6,10 @@ Created on Mon Dec 29 16:46:48 2025
 @author: sebastianschuch
 """
 
-def show():
-    GESAMT_WOCHEN = 5  # oder später aus Session/Admin konfigurierbar
     
-    COMMON_TILE_HEIGHT = 230  # Höhe aller Kacheln
-    COMMON_BAR_HEIGHT = 26    # Höhe der Fortschrittsbalken
-    COMMON_BAR_BORDER = 2      # Rahmenstärke der Balken
-    COMMON_TILE_HEIGHT = 180  # Höhe der Kachel
-    
-        # ---------- ADMIN-KONFIGURATION ----------
-        # jeweils nur in KLEINBUCHSTABEN unabhängig vom eigentlichen Nutzernamen. 
-    ADMIN_USERS = {
-        "sebastian",
-        "fobi"
-    }
+
+def show_dashboard():
+
 
     
     import streamlit as st
@@ -33,6 +23,80 @@ def show():
     import json
     import os
     import re
+    
+
+    
+    
+    # Session-State für einmaligen Hinweis
+
+
+
+    # st.markdown("""
+    # <style>
+    # /* Nachricht nur auf Bildschirmen <= 768px anzeigen */
+    # @media (min-width: 769px) {
+    #     .mobile-only {
+    #         display: none !important;
+    #     }
+    # }
+    # </style>
+    # """, unsafe_allow_html=True)
+    
+    # # Session-State für mobile Hinweis initialisieren
+    # if "mobile_notice_start" not in st.session_state:
+    #     st.session_state["mobile_notice_start"] = datetime.now()
+    
+    # # 7 Sekunden Dauer definieren
+    # notice_duration = timedelta(seconds=7)
+    
+    # # Nachricht anzeigen, wenn Zeit noch nicht abgelaufen
+    # if datetime.now() - st.session_state["mobile_notice_start"] < notice_duration:
+    #     st.markdown("""
+    #     <div class="mobile-only" style="padding: 10px; border-radius: 8px; background-color: #ffe066; color: #011848; font-weight: 600; text-align:center; margin-bottom: 12px;">
+    #         ⚠️ Bei Nutzung übers Smartphone kann es hilfreich sein, den Bildschirm für eine bessere Darstellung zu drehen.
+    #     </div>
+    #     """, unsafe_allow_html=True)
+    
+    #     # Autorefresh alle 1 Sekunde, damit die Nachricht verschwindet
+    #     from streamlit_autorefresh import st_autorefresh
+    #     st_autorefresh(interval=1000, limit=8, key="mobile_notice_refresh")  # refresh bis max. 8x
+    
+    # Session-State für mobile Hinweis initialisieren
+    if "mobile_notice_start" not in st.session_state:
+        st.session_state["mobile_notice_start"] = datetime.now()
+    
+    # 7 Sekunden Dauer definieren
+    notice_duration = timedelta(seconds=7)
+    
+    # Nachricht anzeigen, wenn Zeit noch nicht abgelaufen
+    if datetime.now() - st.session_state["mobile_notice_start"] < notice_duration:
+        st.markdown('<div class="mobile-only">', unsafe_allow_html=True)
+        st.warning("⚠️ Bei Smartphone-Nutzung kann es hilfreich sein den Bildschirm für eine bessere Darstellung zu drehen.")
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+        # Autorefresh alle 1 Sekunde, damit die Nachricht verschwindet
+        from streamlit_autorefresh import st_autorefresh
+        st_autorefresh(interval=1000, limit=8, key="mobile_notice_refresh")
+
+
+
+
+
+        
+    GESAMT_WOCHEN = 5  # oder später aus Session/Admin konfigurierbar
+    
+    COMMON_TILE_HEIGHT = 230  # Höhe aller Kacheln
+    COMMON_BAR_HEIGHT = 26    # Höhe der Fortschrittsbalken
+    COMMON_BAR_BORDER = 2      # Rahmenstärke der Balken
+    COMMON_TILE_HEIGHT = 180  # Höhe der Kachel
+    
+        # ---------- ADMIN-KONFIGURATION ----------
+        # jeweils nur in KLEINBUCHSTABEN unabhängig vom eigentlichen Nutzernamen. 
+    ADMIN_USERS = {
+        "sebastian",
+        "tobi",
+        "sergej"
+    }
  
      
     SETTINGS_FILE = "settings.json"
@@ -65,22 +129,78 @@ def show():
         return name
 
     def load_runs():
-        import os
-        import json
-        from datetime import datetime
-        import re
-    
+        from zoneinfo import ZoneInfo
         if not os.path.exists(RUNS_FILE):
             return {}
     
+        tz = ZoneInfo("Europe/Berlin")  # deine Zeitzone
+    
         try:
             with open(RUNS_FILE, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if not content:
-                    return {}
-                raw = json.loads(content)
-        except json.JSONDecodeError:
+                raw = json.load(f)
+                for user, runs in raw.items():
+                    for run in runs:
+                        if "time" in run and isinstance(run["time"], str):
+                            dt = datetime.fromisoformat(run["time"])
+                            # 🔹 falls naive, tzinfo setzen
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=tz)
+                            run["time"] = dt
+                return raw
+        except Exception as e:
+            st.error(f"Ladefehler für Läufe: {e}")
             return {}
+
+
+    def extract_exif_metadata(image_bytes):
+        from PIL import Image
+        from PIL.ExifTags import TAGS, GPSTAGS
+        from io import BytesIO
+        from datetime import datetime
+        try:
+            img = Image.open(BytesIO(image_bytes))
+            exif_raw = img._getexif()
+            if not exif_raw:
+                return {}
+    
+            exif = {TAGS.get(k, k): v for k, v in exif_raw.items()}
+    
+            result = {}
+    
+            # 📅 Aufnahmezeit
+            dt_original = exif.get("DateTimeOriginal")
+            if dt_original:
+                result["taken_at"] = datetime.strptime(dt_original, "%Y:%m:%d %H:%M:%S").isoformat()
+    
+            # 📍 GPS
+            gps_info = exif.get("GPSInfo")
+            if gps_info:
+                gps_data = {}
+                for key in gps_info:
+                    decoded = GPSTAGS.get(key, key)
+                    gps_data[decoded] = gps_info[key]
+    
+                def convert(coord):
+                    d, m, s = coord
+                    return float(d) + float(m)/60 + float(s)/3600
+    
+                lat = convert(gps_data["GPSLatitude"])
+                if gps_data.get("GPSLatitudeRef") == "S":
+                    lat = -lat
+    
+                lon = convert(gps_data["GPSLongitude"])
+                if gps_data.get("GPSLongitudeRef") == "W":
+                    lon = -lon
+    
+                result["gps"] = {"lat": lat, "lon": lon}
+    
+            return result
+    
+        except Exception:
+            return {}
+
+
+
     
         def parse_time(t):
             """
@@ -160,11 +280,16 @@ def show():
     st.session_state["TEAMZIEL_WOCHEN_ERREICHT"] = stored.get("TEAMZIEL_WOCHEN_ERREICHT", 0)
     st.session_state["admin_info_text"] = stored.get("admin_info_text", "")
     st.session_state["admin_erklaer_text"] = stored.get("admin_erklaer_text", "")
+    st.session_state["active_users_this_week"] = stored.get("active_users_this_week", [])
     st.session_state["lotterie_preise"] = stored.get("lotterie_preise", [
         {"icon": "🎁", "text": "Tolles Buchpaket"},
         {"icon": "🎁", "text": "Café-Gutschein"},
         {"icon": "🎁", "text": "Cooles Gadget"},
     ])
+    st.session_state["RANKING_MODE"] = stored.get("RANKING_MODE","distance_then_speed")
+    
+    if "runs_expander_open" not in st.session_state:
+        st.session_state["runs_expander_open"] = False
     
     # Laden
     # CHALLENGE_START_DATETIME
@@ -468,10 +593,60 @@ def show():
     def escape_html(txt):
         return html.escape(str(txt))
     
+    def get_previous_week_distance_by_user(runs_by_user, all_users, current_week_number):
+        """
+        Liefert dict: {norm_user: distanz_vorwoche_in_meter}
+        """
+        from zoneinfo import ZoneInfo
+        from datetime import datetime
+    
+        tz = ZoneInfo("Europe/Berlin")
+    
+        # Vorwoche bestimmen
+        if current_week_number <= 1:
+            return {normalize_name(u): 0 for u in all_users}
+    
+        dt_start_prev, dt_end_prev = get_challenge_week_start_end(current_week_number - 1)
+    
+        prev_week_dist = {}
+    
+        for username in all_users:
+            norm_user = normalize_name(username)
+            runs = runs_by_user.get(norm_user, [])
+    
+            week_runs = filter_runs_for_week(runs, dt_start_prev, dt_end_prev)
+    
+            total_dist = sum(
+                r.get("dist", 0)
+                for r in week_runs
+                if isinstance(r.get("dist"), (int, float))
+            )
+    
+            prev_week_dist[norm_user] = total_dist
+    
+        return prev_week_dist
+
+    
+    def calc_weighted_distance(current_dist, prev_week_dist):
+        """
+        Distanz bis Vorwochenleistung normal,
+        darüber hinaus doppelt
+        """
+        if prev_week_dist <= 0:
+            # alles zählt doppelt, wenn es keine Vorwoche gibt
+            return current_dist * 2
+    
+        if current_dist <= prev_week_dist:
+            return current_dist
+    
+        excess = current_dist - prev_week_dist
+        return prev_week_dist + excess * 2
+
+    
     
     def platz_lotterie_prozent(platz, wochenziel_erreicht):
-        if not wochenziel_erreicht:
-            return 0.0
+        #if not wochenziel_erreicht:
+            #return 0.0
         if 1 <= platz <= 9:
             table = {
                 1: 25.0,
@@ -494,32 +669,58 @@ def show():
         return st.session_state.get("CHALLENGE_END_DATETIME")
     
     def get_challenge_start_end():
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Europe/Berlin")
         start = st.session_state.get("CHALLENGE_START_DATETIME")
         end = st.session_state.get("CHALLENGE_END_DATETIME")
+    
         if not start:
-            # Fallback: Montag dieser Woche
-            now = datetime.now()
+            now = datetime.now(tz)
             start = now - timedelta(days=now.weekday())
+            start = start.replace(hour=0, minute=0, second=0, microsecond=0)
         if not end:
             end = start + timedelta(days=6, hours=23, minutes=59, seconds=59)
+        
+        # Alles tz-aware
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=tz)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=tz)
+    
         return start, end
 
     
     from datetime import datetime
 
+
+
     def parse_datetime(t):
-        """Versucht, einen Laufzeit-String oder datetime-Objekt korrekt zu parsen."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        """Versucht, einen Laufzeit-String oder datetime-Objekt korrekt zu parsen und tz-aware zu machen."""
+        tz = ZoneInfo("Europe/Berlin")
+        
         if isinstance(t, datetime):
-            return t
-        if isinstance(t, str):
+            dt = t
+        elif isinstance(t, str):
             try:
-                return datetime.fromisoformat(t)
+                dt = datetime.fromisoformat(t)
             except ValueError:
-                # Fallback: Mikrosekunden abschneiden
                 if "." in t:
                     t = t.split(".")[0]
-                    return datetime.fromisoformat(t)
-        return None
+                    dt = datetime.fromisoformat(t)
+                else:
+                    return None
+        else:
+            return None
+    
+        # Alles tz-aware
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=tz)
+    
+        return dt
+
     
     def filter_runs_for_week(läufe, dt_start, dt_ende):
         result = []
@@ -533,25 +734,34 @@ def show():
     
     from datetime import timedelta
 
+
+
     def get_challenge_week_start_end(week_number=None):
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Europe/Berlin")
+        
+        # Challenge Start & End aus Session oder Standard
         start = st.session_state.get("CHALLENGE_START_DATETIME")
         end = st.session_state.get("CHALLENGE_END_DATETIME")
         
         if start is None:
-            # Default: Montag dieser Woche
-            now = datetime.now()
+            now = datetime.now(tz)
             start = now - timedelta(days=now.weekday())
+            start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif start.tzinfo is None:
+            start = start.replace(tzinfo=tz)
         
+        # Woche verschieben
         if week_number is not None and week_number > 1:
             start += timedelta(weeks=week_number - 1)
         
-        if end is None:
-            end = start + timedelta(days=6, hours=23, minutes=59, seconds=59)
-        else:
-            # Optional: Ende auf 23:59:59 Uhr setzen
-            end = datetime.combine(end.date(), datetime.max.time())
+        # Ende der Woche berechnen (immer 6 Tage, 23:59:59)
+        end = start + timedelta(days=6, hours=23, minutes=59, seconds=59)
         
         return start, end
+
+
 
     
     def show_week_tile():
@@ -562,9 +772,9 @@ def show():
         gesamt_wochen = st.session_state.get("GESAMT_WOCHEN", 5)
         aktuelle_woche = st.session_state.get("WOCHENNUMMER", 1)
         dt_start, dt_end = get_challenge_week_start_end(aktuelle_woche)
-    
         teamziel_bisher = st.session_state.get("TEAMZIEL_WOCHEN_ERREICHT", 0)
     
+        # Gesamtfortschritt dieser Woche
         gesamt_pct, _, _ = calc_overall_progress(
             all_users=st.session_state.get("active_users_this_week", []),
             runs_by_user=st.session_state.get("runs_by_user", {}),
@@ -573,13 +783,28 @@ def show():
             dt_end=dt_end
         )
     
+        # Schwelle & aktuelles Teamziel
         schwelle = st.session_state.get("BATTERIE_SCHWELLE", 50)
         teamziel_diese_woche = gesamt_pct >= schwelle
         teamziel_anzeige = teamziel_bisher + (1 if teamziel_diese_woche else 0)
+        wochen_fortschritt = (aktuelle_woche / gesamt_wochen) * 100 if gesamt_wochen > 0 else 0
+        green_width_pct = (teamziel_anzeige / gesamt_wochen) * 100 if gesamt_wochen > 0 else 0
     
-        wochen_fortschritt = (
-            (aktuelle_woche / gesamt_wochen) * 100 if gesamt_wochen > 0 else 0
-        )
+        # Motivationstext anpassen, wenn die Challenge noch nicht gestartet ist
+        start_datetime = st.session_state.get("CHALLENGE_START_DATETIME", datetime.now())
+        now = datetime.now()
+    
+        if now < start_datetime:
+            motivation_text = "⏳ Die Laufchallenge startet bald"
+            motivation_color = "#ffe066"
+        elif teamziel_diese_woche:
+            motivation_text = "🎉 Das Teamziel dieser Woche wurde bereits erreicht."
+            motivation_color = "#ffe066"
+        else:
+            motivation_text = "👥 Das Erreichen des Teamziels steht diese Woche noch aus!"
+            motivation_color = "#ffe066"
+    
+        COMMON_TILE_HEIGHT = st.session_state.get("COMMON_TILE_HEIGHT", 180)
     
         html_code = textwrap.dedent(f"""
         <style>
@@ -593,65 +818,69 @@ def show():
                 font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
                 display: flex;
                 flex-direction: column;
-                justify-content: flex-start;
+                justify-content: flex-start; /* alles oben */
                 text-align: left;
             }}
     
-            /* 👉 exakt wie bottom3 */
-            .tile-title {{
-                font-size: 1.2em;
-                font-weight: 800;
-                margin-bottom: 12px;
-            }}
-    
+            .tile-title {{ font-size: 1.2em; font-weight: 800; margin-bottom: 12px; }}
             .progress-container {{
+                position: relative;
                 background: rgba(255,255,255,0.25);
                 border-radius: 8px;
                 overflow: hidden;
-                height: 10px;
-                margin-bottom: 12px;
+                height: 14px;
+                margin-bottom: 8px;
             }}
-    
             .progress-bar {{
                 background: #ffffff;
                 height: 100%;
                 width: {wochen_fortschritt:.0f}%;
+                border-radius: 4px;
+                z-index: 1;
+            }}
+            .progress-green {{
+                position: absolute;
+                left: 0;
+                top: 0;
+                height: 100%;
+                width: {green_width_pct:.0f}%;
+                background: #7befb4;
+                border-radius: 4px 0 0 4px;
+                z-index: 2;
             }}
     
-            /* 👉 entspricht podium-row */
-            .tile-label {{
-                font-size: 0.95em;
+            .tile-label {{ font-size: 0.95em; font-weight: 600; margin-bottom: 2px; }}
+            .tile-secondary {{ font-size: 0.95em; font-weight: 600; color: #ffffff; }}
+            .tile-motivation {{
+                font-size: 0.75em;
                 font-weight: 600;
-                margin-bottom: 4px;
-            }}
-    
-            /* 👉 entspricht tile-note */
-            .tile-secondary {{
-                font-size: 0.85em;
-                font-weight: 500;
-                margin-top: 8px;
-                color: #ffd700;
+                color: {motivation_color};
+                margin-top: 10px;  /* kleiner Abstand direkt unter Teamziel */
             }}
         </style>
     
         <div class="dashboard-tile">
-            <div class="tile-title">Challenge-Woche</div>
+            <div class="tile-title">✅ Fortschritt</div>
     
             <div class="progress-container">
                 <div class="progress-bar"></div>
+                <div class="progress-green"></div>
             </div>
     
-            <div class="tile-label">
-                Woche {aktuelle_woche} / {gesamt_wochen}
-            </div>
-    
-            <div class="tile-secondary">
-                Teamziel: {teamziel_anzeige}/{gesamt_wochen}
-            </div>
+            <div class="tile-label">Woche {aktuelle_woche} / {gesamt_wochen}</div>
+            <div class="tile-secondary">Teamziel: {teamziel_anzeige} / {gesamt_wochen}</div>
+            <div class="tile-motivation">{motivation_text}</div>
         </div>
         """)
     
         components.html(html_code, height=COMMON_TILE_HEIGHT)
+
+
+
+
+
+
+
 
 
 
@@ -689,9 +918,13 @@ def show():
     
     
     
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    
     def calc_overall_progress(all_users, runs_by_user, wochenziel_m, dt_start=None, dt_end=None):
-        dt_start = dt_start or datetime.now()
-        dt_end = dt_end or datetime.now()
+        tz = ZoneInfo("Europe/Berlin")
+        dt_start = dt_start or datetime.now(tz)
+        dt_end = dt_end or datetime.now(tz)
         
         n_gesamt = len(all_users)
         n_done = 0
@@ -709,160 +942,9 @@ def show():
 
 
 
-    
-    def admin_module():
-        if not is_admin():
-            st.error("⛔ Keine Berechtigung.")
-            return
-    
-        st.markdown("### 🔑 Admin-Bereich")
-    
-        tab_settings, tab_runs = st.tabs([
-            "⚙️ Einstellungen",
-            "🏃 Läufe & Beweisbilder"
-        ])
-    
-        # -------------------------------------------------
-        # TAB 1: EINSTELLUNGEN
-        # -------------------------------------------------
-        with tab_settings:
-            st.info(
-                "Hier können challenge-relevante Parameter angepasst werden. "
-                "Änderungen gelten sofort für alle!"
-            )
-    
-            # ---------- Basis-Einstellungen ----------
-            neue_woche = st.slider(
-                "Aktuelle Challenge-Woche",
-                min_value=0,
-                max_value=GESAMT_WOCHEN,
-                value=st.session_state["WOCHENNUMMER"]
-            )
-    
-            ziel = st.number_input(
-                "Wochenziel in Metern",
-                min_value=500,
-                max_value=100000,
-                value=st.session_state["WOCHENZIEL"],
-                step=100
-            )
-    
-            batterie = st.slider(
-                "Batterie-Schwellenwert (%)",
-                min_value=1,
-                max_value=100,
-                value=st.session_state["BATTERIE_SCHWELLE"]
-            )
-    
-            info_text = st.text_area(
-                "Admin Infotext",
-                value=st.session_state["admin_info_text"]
-            )
-    
-    
-            enddt = st.date_input(
-                "Challenge-Enddatum",
-                value=st.session_state["CHALLENGE_END_DATETIME"].date()
-            )
-    
-            endtime = st.time_input(
-                "End-Uhrzeit",
-                value=st.session_state["CHALLENGE_END_DATETIME"].time()
-            )
-            
-            startdt = st.date_input(
-                "Challenge-Startdatum",
-                value=st.session_state.get("CHALLENGE_START_DATETIME", datetime.now()).date()
-            )
-            starttime = st.time_input(
-                "Start-Uhrzeit",
-                value=st.session_state.get("CHALLENGE_START_DATETIME", datetime.now()).time()
-            )
-            
-            teamziel_wochen = st.number_input(
-            "Teamziel erreicht in bisherigen Wochen",
-            min_value=0,
-            max_value=GESAMT_WOCHEN,
-            value=st.session_state.get("TEAMZIEL_WOCHEN_ERREICHT", 0),
-            step=1
-            )
-            
-            st.markdown("### 🏃 Aktive Teilnehmer auswählen (für diese Woche)")
-
-            all_users_total = st.session_state.get("all_usernames", [])
-            selected_users = st.multiselect(
-                "Wer nimmt diese Woche teil?",
-                options=all_users_total,
-                default=st.session_state.get("active_users_this_week", all_users_total)
-            )
-    
-            # ---------- Lotteriepreise ----------
-            st.markdown("### 🎁 Lotterie-Wochenpreise konfigurieren")
-    
-            if "lotterie_preise" not in st.session_state:
-                st.session_state["lotterie_preise"] = [
-                    {"icon": "🎁", "text": "Tolles Buchpaket"},
-                    {"icon": "🎁", "text": "Café-Gutschein"},
-                    {"icon": "🎁", "text": "Cooles Gadget"},
-                ]
-    
-            preise = st.session_state["lotterie_preise"]
-    
-            # Für jede vorhandene Kachel Admin-Eingaben
-            for i, preis in enumerate(preise):
-                col1, col2 = st.columns([1, 3])
-                with col1:
-                    icon = st.text_input(f"Icon für Preis {i+1}", value=preis["icon"], key=f"icon_{i}")
-                with col2:
-                    text = st.text_input(f"Text für Preis {i+1}", value=preis.get("text", ""), key=f"text_{i}")
-                preise[i]["icon"] = icon
-                preise[i]["text"] = text
-    
-            # Möglichkeit, weitere Preise hinzuzufügen
-            if st.button("➕ Preis hinzufügen"):
-                preise.append({"icon": "🎁", "text": "Neuer Preis"})
-    
-            # Möglichkeit, Preise zu löschen
-            for i in reversed(range(len(preise))):
-                if st.button(f"🗑 Preis {i+1} löschen"):
-                    preise.pop(i)
-                    break
-    
-            st.session_state["lotterie_preise"] = preise
-    
-            # Änderungen speichern
-            if st.button("💾 Änderungen speichern"):
-                st.session_state["WOCHENNUMMER"] = neue_woche
-                st.session_state["WOCHENZIEL"] = ziel
-                st.session_state["BATTERIE_SCHWELLE"] = batterie
-                st.session_state["admin_info_text"] = info_text
-                st.session_state["CHALLENGE_START_DATETIME"] = datetime.combine(startdt, starttime)
-                st.session_state["CHALLENGE_END_DATETIME"] = datetime.combine(enddt, endtime)
-                st.session_state["TEAMZIEL_WOCHEN_ERREICHT"] = teamziel_wochen
-                st.session_state["lotterie_preise"] = preise
-                st.session_state["active_users_this_week"] = selected_users
-            
-                save_settings({
-                    "WOCHENNUMMER": st.session_state["WOCHENNUMMER"],
-                    "WOCHENZIEL": st.session_state["WOCHENZIEL"],
-                    "BATTERIE_SCHWELLE": st.session_state["BATTERIE_SCHWELLE"],
-                    "CHALLENGE_START_DATETIME": st.session_state["CHALLENGE_START_DATETIME"].isoformat(),
-                    "CHALLENGE_END_DATETIME": st.session_state["CHALLENGE_END_DATETIME"].isoformat(),
-                    "TEAMZIEL_WOCHEN_ERREICHT": st.session_state["TEAMZIEL_WOCHEN_ERREICHT"],
-                    "admin_info_text": st.session_state["admin_info_text"],
-                    "lotterie_preise": st.session_state["lotterie_preise"],
-                    "active_users_this_week": st.session_state["active_users_this_week"]
-                })
-            
-                st.success("✅ Einstellungen gespeichert.")
-                st.rerun()
 
     
-        # -------------------------------------------------
-        # TAB 2: LÄUFE & BEWEISBILDER
-        # -------------------------------------------------
-        with tab_runs:
-            show_admin_runs_overview()
+
 
 
 
@@ -879,7 +961,11 @@ def show():
         import textwrap
         import streamlit as st
         import streamlit.components.v1 as components
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
     
+        tz = ZoneInfo("Europe/Berlin")
+        
         COMMON_TILE_HEIGHT = st.session_state.get("COMMON_TILE_HEIGHT", 180)
         COMMON_BAR_HEIGHT = st.session_state.get("COMMON_BAR_HEIGHT", 20)
         COMMON_BAR_BORDER = st.session_state.get("COMMON_BAR_BORDER", "2px")
@@ -888,6 +974,7 @@ def show():
         aktuelle_woche = st.session_state.get("WOCHENNUMMER", 1)
         dt_start, dt_end = get_challenge_week_start_end(aktuelle_woche)
 
+        wochenziel_m = st.session_state.get("WOCHENZIEL", 0) /1000 # Mindest-Wochenziel
     
         # --- Gesamtfortschritt berechnen für die aktuelle Woche ---
         gesamt_pct, ges_done, ges_count = calc_overall_progress(
@@ -907,17 +994,35 @@ def show():
             fill_class = "fill-rot"
         else:
             fill_class = "fill-gruen"
+            
+        start_datetime = st.session_state.get("CHALLENGE_START_DATETIME", None)
+
+        if start_datetime is None:
+            start_datetime = datetime.now(tz)
+        else:
+            # Falls start_datetime naive ist, auf aware konvertieren
+            if start_datetime.tzinfo is None:
+                start_datetime = start_datetime.replace(tzinfo=tz)
+        now = datetime.now(tz)
+    
+        if now < start_datetime:
+            
+            status_text = "Teamziel noch offen ✖"
+            benoetigte_teilnehmer = math.ceil((schwelle / 100) * ges_count)
+            fehlende_teilnehmer = max(0, benoetigte_teilnehmer - ges_done)
+            info_text = f"ℹ️ Mind. {fehlende_teilnehmer} Spieler müssen das Ziel erreichen!"
+            info_color = "#ffe066"
     
         # --- Status & Zusatzinfo ---
-        if gesamt_pct >= schwelle:
+        elif gesamt_pct >= schwelle:
             status_text = "Teamziel erreicht ✔"
             info_text = "💪 Starkes Team – weiter so!"
-            info_color = "#28a745"
+            info_color = "#ffe066"
         else:
             status_text = "Teamziel noch offen ✖"
             benoetigte_teilnehmer = math.ceil((schwelle / 100) * ges_count)
             fehlende_teilnehmer = max(0, benoetigte_teilnehmer - ges_done)
-            info_text = f"🏃‍♂️ Mind. {fehlende_teilnehmer} Teilnehmer fehlen"
+            info_text = f"⚠️ Mind. {fehlende_teilnehmer} Spieler müssen das Ziel noch erreichen!"
             info_color = "#ffe066"
     
         html_code = textwrap.dedent(f"""
@@ -948,11 +1053,12 @@ def show():
             }}
     
             .tile-hint {{
-                margin-top: 10px;
+                margin-top: 7px;
                 font-size: 0.75em;
+                font-weight: 600;
                 color: {info_color};
             }}
-    
+            .tile-goal {{ font-size: 0.8em; font-weight: 600; margin-bottom: 4px; color: #ffffff; }}
             .bar-body {{
                 position: relative;
                 width: 100%;
@@ -1018,6 +1124,7 @@ def show():
             </div>
     
             <div class="tile-row">{status_text}</div>
+            <div class="tile-goal">Wochenziel: {wochenziel_m} km</div>
             <div class="tile-hint">{info_text}</div>
         </div>
         """)
@@ -1042,94 +1149,146 @@ def show():
     
         user_row = next((r for r in rows if r["name"] == user), None)
         if not user_row:
-            st.warning(f"Kein Rang für {user} gefunden.")
-            return
-    
-        platz = user_row.get("platz", 0)
-        ziel_ok = user_row.get("ziel", False)
-        lotto_pct = platz_lotterie_prozent(platz, ziel_ok)
-    
-        # --- Podest-Icon ---
-        if platz == 1:
-            podium_icon = " 🥇"
-        elif platz == 2:
-            podium_icon = " 🥈"
-        elif platz == 3:
-            podium_icon = " 🥉"
-        else:
-            podium_icon = ""
-    
-        # --- Status ---
-        unter_den_koechen = platz > len(rows) - 3
-    
-        ziel_color = "#28a745" if ziel_ok else "#dc3545"
-        koch_color = "#dc3545" if unter_den_koechen else "#28a745"
-    
-        ziel_text = "Beitrag Teamziel ✔" if ziel_ok else "Beitrag Teamziel ✖"
-        koch_text = "Koch 🍽️" if unter_den_koechen else "Kein Koch"
-    
-        lotto_text = f"{lotto_pct:.0f}%" if ziel_ok else "0%"
-    
-        # --- Optionaler Motivationshinweis ---
-        motivation = ""
-        if not ziel_ok:
-            motivation = "<div class='tile-hint'>🏃‍♂️ Laufe fürs Team und dich!</div>"
-
-    
-        html_code = textwrap.dedent(f"""
-        <style>
-            .dashboard-tile {{
-                background: linear-gradient(135deg, #1e3c72, #2563eb);
-                color: #ffffff;
-                border-radius: 14px;
-                padding: 16px;
-                height: {COMMON_TILE_HEIGHT}px;
-                box-shadow: 0 6px 18px rgba(0,0,0,0.15);
-                font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-                display: flex;
-                flex-direction: column;
-                justify-content: flex-start;
-            }}
-    
-            .tile-title {{
-                font-size: 1.4em;
-                font-weight: 800;
-                margin-bottom: 12px;
-            }}
-    
-            .tile-row {{
-                font-size: 0.9em;
-                font-weight: 600;
-                margin: 3px 0;
-            }}
-    
-            .tile-hint {{
-                margin-top: 10px;
-                font-size: 0.8em;
-                color: #ffe066;
-            }}
-        </style>
-    
-        <div class="dashboard-tile">
-            <div class="tile-title">{platz}. Platz{podium_icon}</div>
-    
-            <div class="tile-row" style="color:{ziel_color};">
-                {ziel_text}
+            podium_icon=""
+            koch_text=""
+            ziel_text=""
+            platz="Keine Teilnahme"
+            lotto_text = "0%"
+            html_code = textwrap.dedent(f"""
+            <style>
+                .dashboard-tile {{
+                    background: linear-gradient(135deg, #1e3c72, #2563eb);
+                    color: #ffffff;
+                    border-radius: 14px;
+                    padding: 16px;
+                    height: {COMMON_TILE_HEIGHT}px;
+                    box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+                    font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: flex-start;
+                }}
+        
+                .tile-title {{
+                    font-size: 1.4em;
+                    font-weight: 800;
+                    margin-bottom: 12px;
+                }}
+        
+                .tile-row {{
+                    font-size: 0.9em;
+                    font-weight: 600;
+                    margin: 3px 0;
+                }}
+        
+                .tile-hint {{
+                    margin-top: 10px;
+                    font-size: 0.75em;
+                    font-weight: 600;
+                    color: "#ffe066";
+                }}
+            </style>
+        
+            <div class="dashboard-tile">
+                <div class="tile-title">{platz} </div>
+        
+        
+                <div class="tile-row">
+                    Lotterie: {lotto_text}
+                </div>
+        
             </div>
+            """)
+        
+            components.html(html_code, height=COMMON_TILE_HEIGHT)
+  
+        if user_row:
+            platz = user_row.get("platz", 0)
+            ziel_ok = user_row.get("ziel", False)
+            lotto_pct = platz_lotterie_prozent(platz, ziel_ok)
+        
+            # --- Podest-Icon ---
+            if platz == 1:
+                podium_icon = "🥇 "
+            elif platz == 2:
+                podium_icon = "🥈 "
+            elif platz == 3:
+                podium_icon = "🥉 "
+            else:
+                podium_icon = "#️⃣ "
+        
+            # --- Status ---
+            unter_den_koechen = platz > len(rows) - 3
+        
+            ziel_color = "#28a745" if ziel_ok else "#dc3545"
+            koch_color = "#dc3545" if unter_den_koechen else "#28a745"
+        
+            ziel_text = "Beitrag Teamziel ✔" if ziel_ok else "Beitrag Teamziel ✖"
+            koch_text = "Koch 🍽️" if unter_den_koechen else "Kein Koch"
+        
+            lotto_text = f"{lotto_pct:.1f}%" if ziel_ok else "0.0%"
+        
+            # --- Optionaler Motivationshinweis ---
+            motivation = ""
+            if True:
+                motivation = "<div class='tile-hint'>🏃‍♂️ Laufe für dich und das Team!</div>"
     
-            <div class="tile-row" style="color:{koch_color};">
-                {koch_text}
+        
+            html_code = textwrap.dedent(f"""
+            <style>
+                .dashboard-tile {{
+                    background: linear-gradient(135deg, #1e3c72, #2563eb);
+                    color: #ffffff;
+                    border-radius: 14px;
+                    padding: 16px;
+                    height: {COMMON_TILE_HEIGHT}px;
+                    box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+                    font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: flex-start;
+                }}
+        
+                .tile-title {{
+                    font-size: 1.4em;
+                    font-weight: 800;
+                    margin-bottom: 12px;
+                }}
+        
+                .tile-row {{
+                    font-size: 0.9em;
+                    font-weight: 600;
+                    margin: 3px 0;
+                }}
+        
+                .tile-hint {{
+                    margin-top: 10px;
+                    font-size: 0.75em;
+                    font-weight: 600;
+                    color: #ffe066;
+                }}
+            </style>
+        
+            <div class="dashboard-tile">
+                <div class="tile-title">{podium_icon}{platz}. Platz</div>
+        
+                <div class="tile-row" style="color:{ziel_color};">
+                    {ziel_text}
+                </div>
+        
+                <div class="tile-row" style="color:{koch_color};">
+                    {koch_text}
+                </div>
+        
+                <div class="tile-row">
+                    Lotterie: {lotto_text}
+                </div>
+        
+                {motivation}
             </div>
-    
-            <div class="tile-row">
-                Lotterie: {lotto_text}
-            </div>
-    
-            {motivation}
-        </div>
-        """)
-    
-        components.html(html_code, height=COMMON_TILE_HEIGHT)
+            """)
+        
+            components.html(html_code, height=COMMON_TILE_HEIGHT)
 
 
 
@@ -1142,17 +1301,20 @@ def show():
         import textwrap
         import streamlit as st
         import streamlit.components.v1 as components
+        
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
     
-        # ----- Annahme: rows enthält die Rangliste -----
+        tz = ZoneInfo("Europe/Berlin")
+    
         rows = st.session_state.get("rangliste_rows", [])
         if not rows:
             st.warning("Rangliste ist noch nicht verfügbar.")
             return
     
-        # Nimm die Top 3
+        # Top 3
         podium_rows = rows[:3] if len(rows) >= 3 else rows
     
-        # Erzeuge HTML für jeden Podiumsplatz
         podium_html = ""
         for user_row in podium_rows:
             name = user_row.get("name", "Unbekannt")
@@ -1168,8 +1330,23 @@ def show():
                 platz_text = f"{platz}. Platz"
     
             podium_html += textwrap.dedent(f"""
-            <div class="podium-row"><strong>{platz_text}</strong>: {name}</div>
+                <div class="podium-row"><strong>{platz_text}</strong>: {name}</div>
             """)
+        start_datetime = st.session_state.get("CHALLENGE_START_DATETIME", None)
+        
+        if start_datetime is None:
+            start_datetime = datetime.now(tz)
+        else:
+            # Falls start_datetime naive ist, auf aware konvertieren
+            if start_datetime.tzinfo is None:
+                start_datetime = start_datetime.replace(tzinfo=tz)
+        now = datetime.now(tz)
+        # --- Motivation (identisches Pattern wie show_rank_tile) ---
+        motivation = ""
+        if now < start_datetime:
+            motivation = "<div class='tile-hint'>ℹ️ Keine Aussagekraft. Challenge startet bald!</div>"
+        else:
+            motivation = "<div class='tile-hint'>👑 Ruhm und Ehre!</div>"
     
         html_code = textwrap.dedent(f"""
         <style>
@@ -1184,25 +1361,35 @@ def show():
                 display: flex;
                 flex-direction: column;
                 justify-content: flex-start;
-                text-align: left;  /* linksbündig für alle Plätze */
             }}
+    
             .tile-title {{
                 font-size: 1.2em;
                 font-weight: 800;
                 margin-bottom: 12px;
-                text-align: left; /* Titel bleibt zentriert */
             }}
+    
             .podium-row {{
                 font-size: 0.95em;
                 font-weight: 600;
                 margin-bottom: 4px;
-                padding-left: 0;   /* keine Einrückung */
+            }}
+    
+            /* IDENTISCH zu show_rank_tile */
+            .tile-hint {{
+                margin-top: 15px;
+                font-size: 0.75em;
+                font-weight: 600;
+                color: #ffe066;
             }}
         </style>
     
         <div class="dashboard-tile">
-            <div class="tile-title">🏆 Die Lauf-MVPs</div>
+            <div class="tile-title">🏆 Lauf-MVPs</div>
+    
             {podium_html}
+    
+            {motivation}
         </div>
         """)
     
@@ -1210,38 +1397,60 @@ def show():
 
 
 
+
     def show_bottom3_tile():
         import textwrap
         import streamlit as st
         import streamlit.components.v1 as components
+        
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
     
-        # ----- Annahme: rows enthält die Rangliste -----
+        tz = ZoneInfo("Europe/Berlin")
+    
         rows = st.session_state.get("rangliste_rows", [])
         if not rows:
             st.warning("Rangliste ist noch nicht verfügbar.")
             return
     
-        # Nimm die letzten 3
         bottom_rows = rows[-3:] if len(rows) >= 3 else rows
     
-        # Erzeuge HTML für jeden Platz
         bottom_html = ""
         for user_row in bottom_rows:
             name = user_row.get("name", "Unbekannt")
             platz = user_row.get("platz", 0)
     
-            if platz == len(rows):
-                platz_text = f"{platz}. Platz"
-            elif platz == len(rows)-1:
-                platz_text = f"{platz}. Platz"
-            elif platz == len(rows)-2:
-                platz_text = f"{platz}. Platz"
-            else:
-                platz_text = f"{platz}. Platz"
+            platz_text = f"{platz}. Platz"
     
             bottom_html += textwrap.dedent(f"""
-            <div class="podium-row"><strong>{platz_text}</strong>: {name}</div>
+                <div class="podium-row"><strong>{platz_text}</strong>: {name}</div>
             """)
+    
+        # --- Motivation (analog zu den anderen Tiles) ---
+        motivation = ""
+        start_datetime = st.session_state.get("CHALLENGE_START_DATETIME", None)
+
+        if start_datetime is None:
+            start_datetime = datetime.now(tz)
+        else:
+            # Falls start_datetime naive ist, auf aware konvertieren
+            if start_datetime.tzinfo is None:
+                start_datetime = start_datetime.replace(tzinfo=tz)
+        now = datetime.now(tz)
+        # --- Motivation (identisches Pattern wie show_rank_tile) ---
+        motivation = ""
+        if now < start_datetime:
+            motivation = (
+                "<div class='tile-hint'>"
+                "ℹ️ Keine Aussagekraft. Challenge startet bald!"
+                "</div>"
+            )
+        else:
+            motivation = (
+                "<div class='tile-hint'>"
+                " 🍔 Ein Mannschaftsessen wird Stand jetzt von euch organisiert!"
+                "</div>"
+            )
     
         html_code = textwrap.dedent(f"""
         <style>
@@ -1256,35 +1465,40 @@ def show():
                 display: flex;
                 flex-direction: column;
                 justify-content: flex-start;
-                text-align: left;
             }}
+    
             .tile-title {{
                 font-size: 1.2em;
                 font-weight: 800;
                 margin-bottom: 12px;
-                text-align: left;
             }}
+    
             .podium-row {{
                 font-size: 0.95em;
                 font-weight: 600;
                 margin-bottom: 4px;
-                padding-left: 0;
             }}
-            .tile-note {{
-                font-size: 0.85em;
-                font-weight: 500;
-                margin-top: 8px;
-                color: #ffd700;
+    
+            /* IDENTISCH zu Rank- & Podium-Tile */
+            .tile-hint {{
+                margin-top: 4px;
+                font-size: 0.75em;
+                font-weight: 600;
+                color: #ffe066;
             }}
         </style>
     
         <div class="dashboard-tile">
-            <div class="tile-title">🍽️ Die Köche</div>
+            <div class="tile-title">🍽️ Köche</div>
+    
             {bottom_html}
+    
+            {motivation}
         </div>
         """)
     
         components.html(html_code, height=COMMON_TILE_HEIGHT)
+
 
 
 
@@ -1298,12 +1512,17 @@ def show():
         import textwrap
         import streamlit as st
         import streamlit.components.v1 as components
-        from datetime import datetime, timedelta
+        
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
     
-        COMMON_TILE_HEIGHT = 180  # Höhe der Kachel
-        end_datetime = st.session_state.get("CHALLENGE_END_DATETIME", datetime.now())
-        start_datetime = st.session_state.get("CHALLENGE_START_DATETIME", datetime.now())
-        end_ts = int(end_datetime.timestamp() * 1000)
+        tz = ZoneInfo("Europe/Berlin")
+    
+        COMMON_TILE_HEIGHT = 180
+        end_datetime = st.session_state.get("CHALLENGE_END_DATETIME", datetime.now(tz))
+        start_datetime = st.session_state.get("CHALLENGE_START_DATETIME", datetime.now(tz))
+        end_ts = int((end_datetime - timedelta(hours=1)).astimezone(tz).timestamp() * 1000)
+        start_ts = int(start_datetime.astimezone(tz).timestamp() * 1000)
     
         html_code = textwrap.dedent(f"""
         <style>
@@ -1340,41 +1559,47 @@ def show():
             }}
             .tile-note {{
                 font-size: 0.75em;
-                font-weight: 500;
-                margin-top: 6px;
-                color: #ffd700;
+                font-weight: 600;
+                margin-top: 35px;
+                color: #ffe066;
                 text-align: left;
             }}
             .tile-note::before {{
-                content: "⏳ ";  /* Sanduhr statt Läufer */
+                content: "⏳ ";
             }}
         </style>
     
         <div class="dashboard-tile">
-            <div class="tile-title">Verbleibende Zeit</div>
+            <div class="tile-title">⏱️ Countdown</div>
             <div id="countdown" class="countdown-inner-tile"></div>
             <div id="countdown-note" class="tile-note"></div>
         </div>
     
         <script>
+            const startTime = {start_ts};
             const endTime = {end_ts};
-            const startTime = {int(start_datetime.timestamp() * 1000)};
-            
+    
             function updateCountdown() {{
                 const now = new Date().getTime();
-                let diff = endTime - now;
-                const noteEl = document.getElementById("countdown-note");
                 const el = document.getElementById("countdown");
-    
+                const noteEl = document.getElementById("countdown-note");
                 if (!el || !noteEl) return;
     
-                if (now < startTime) {{
-                    el.innerHTML = "⏳ Challenge startet bald!";
-                    noteEl.innerHTML = "Noch nichts zu tun – Vorbereitung starten!";
-                    return;
-                }}
+                let diff = 0;
+                let noteText = "";
     
-                if (diff <= 0) {{
+                if (now < startTime) {{
+                    // Countdown bis zum Start
+                    diff = startTime - now;
+                    noteText = "Die Laufchallenge startet bald!";
+                }} else if (now >= startTime && now <= endTime) {{
+                    // Countdown bis zum Ende
+                    diff = endTime - now;
+                    noteText = ((diff / (1000*60*60)) > 72)
+                        ? "Noch ausreichend Zeit, Läufe einzureichen und dich zu verbessern."
+                        : "Die Zeit läuft! Jetzt noch Läufe einreichen!";
+                }} else {{
+                    // Challenge vorbei
                     el.innerHTML = "⏰ Challenge beendet!";
                     noteEl.innerHTML = "";
                     return;
@@ -1394,14 +1619,7 @@ def show():
                     <div class="countdown-unit">${{minutes.toString().padStart(2,"0")}}m</div>
                     <div class="countdown-unit">${{seconds.toString().padStart(2,"0")}}s</div>
                 `;
-    
-                // Implikation je nach Restzeit
-                const totalHoursLeft = (endTime - now) / (1000*60*60);
-                if(totalHoursLeft > 72) {{
-                    noteEl.innerHTML = "Noch ausreichend Zeit, Läufe einzureichen und dich zu verbessern.";
-                }} else {{
-                    noteEl.innerHTML = "Die Zeit läuft! Jetzt noch Läufe einreichen!";
-                }}
+                noteEl.innerHTML = noteText;
             }}
     
             updateCountdown();
@@ -1412,6 +1630,33 @@ def show():
         components.html(html_code, height=COMMON_TILE_HEIGHT)
 
 
+    def open_run_form():
+        st.session_state["show_run_form"] = True
+        st.session_state["show_my_runs"] = False
+        st.session_state["runs_expander_open"] = True
+
+    def toggle_my_runs():
+        st.session_state["show_my_runs"] = not st.session_state.get("show_my_runs", False)
+        st.session_state["show_run_form"] = False
+        st.session_state["runs_expander_open"] = True
+        
+    def get_best_avg_speed_kmh(runs):
+        """
+        Ermittelt die höchste Durchschnittsgeschwindigkeit (km/h)
+        aus einer Liste von Läufen.
+        """
+        best_speed = None
+    
+        for r in runs:
+            dist = r.get("dist", 0)        # Meter
+            dur = r.get("duration", 0)     # Sekunden
+    
+            if dist > 0 and dur > 0:
+                speed = (dist / 1000) / (dur / 3600)  # km/h
+                if best_speed is None or speed > best_speed:
+                    best_speed = speed
+    
+        return best_speed
 
 
 
@@ -1419,35 +1664,126 @@ def show():
     def save_runs(runs_by_user):
         import os
         import json
+        from datetime import datetime
     
-        # Ordner sicherstellen
         os.makedirs(os.path.dirname(RUNS_FILE), exist_ok=True)
     
         serializable = {}
+    
         for user, runs in runs_by_user.items():
             serializable[user] = []
+    
             for r in runs:
-                r_copy = r.copy()
-                r_copy["time"] = r_copy["time"].isoformat()
+                r_copy = {}
+    
+                for key, value in r.items():
+                    if key == "time" and isinstance(value, datetime):
+                        r_copy[key] = value.isoformat()
+    
+                    elif key == "proof_image" and isinstance(value, dict):
+                        proof_copy = value.copy()
+    
+                        uploaded_at = proof_copy.get("uploaded_at")
+                        if isinstance(uploaded_at, datetime):
+                            proof_copy["uploaded_at"] = uploaded_at.isoformat()
+    
+                        r_copy["proof_image"] = proof_copy
+    
+                    else:
+                        r_copy[key] = value
+    
                 serializable[user].append(r_copy)
     
         with open(RUNS_FILE, "w", encoding="utf-8") as f:
             json.dump(serializable, f, indent=2, ensure_ascii=False)
+            
+
+
+
+    def send_new_run_mail(run, user_display):
+        SMTP_HOST = "posteo.de"
+        SMTP_PORT = 465
+        SMTP_USER = "laufchallengetsvgerabronn@posteo.de"
+        SMTP_PASSWORD = "Laufchallenge123+"
+
+        SMTP_FROM = "Laufchallenge <laufchallengetsvgerabronn@posteo.de>"
+        ADMIN_MAILS = ["sebastian.schuch.gerabronn@gmail.com","tob.pelzer@web.de"]
+        import smtplib
+        from email.message import EmailMessage
+        import base64
+        import json
+        """
+        run = einzelner Lauf (dict)
+        user_display = Anzeigename des Nutzers
+        """
+    
+        msg = EmailMessage()
+        msg["Subject"] = "🏃 Neuer Lauf eingereicht"
+        msg["From"] = SMTP_FROM
+        msg["To"] = ", ".join(ADMIN_MAILS)  # Liste oder String
+    
+        dist_km = run["dist"] / 1000
+        duration_min = run["duration"] // 60
+        duration_sec = run["duration"] % 60
+    
+        body = f"""
+    Neuer Lauf wurde eingereicht:
+    
+    👤 Nutzer: {user_display}
+    📏 Distanz: {dist_km:.2f} km
+    ⏱ Dauer: {duration_min}:{duration_sec:02d} min
+    🕒 Zeitpunkt: {run["time"]}
+    
+    📝 Kommentar:
+    {run.get("comment", "-")}
+    
+    📸 Bildinformationen:
+    Dateiname: {run["proof_image"]["name"]}
+    Typ: {run["proof_image"]["type"]}
+    
+    🧾 EXIF-Metadaten:
+    {json.dumps(run["proof_image"].get("exif", {}), indent=2, ensure_ascii=False)}
+        """
+    
+        msg.set_content(body)
+    
+        # --- Bild anhängen ---
+        image_b64 = run["proof_image"]["data"]
+        image_bytes = base64.b64decode(image_b64)
+    
+        msg.add_attachment(
+            image_bytes,
+            maintype="image",
+            subtype=run["proof_image"]["type"].split("/")[-1],
+            filename=run["proof_image"]["name"]
+        )
+    
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as server:
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
+
+
 
               
     def add_run_entry():
+
         import base64
         from datetime import datetime
         
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        
+        tz = ZoneInfo("Europe/Berlin")
+        
+        challenge_start = st.session_state.get("CHALLENGE_START_DATETIME", datetime.now(tz))
+        challenge_started = challenge_start and datetime.now() >= challenge_start
     
         user = st.session_state.get("user")
         if not user:
             st.warning("Bitte zuerst einloggen, um einen Lauf einzutragen.")
             return
         
-        if user not in st.session_state.get("active_users_this_week", []):
-            st.warning("Du bist diese Woche nicht als Teilnehmer registriert.")
-            return
+
     
         # Session-State Flags initialisieren
         if "show_run_form" not in st.session_state:
@@ -1458,19 +1794,27 @@ def show():
         # Zwei Buttons nebeneinander
         col1, col2 = st.columns([1, 1], gap="small")
         with col1:
-            if st.button("➕ Neuen Lauf eintragen", key="btn_add_run"):
-                st.session_state["show_run_form"] = True
-                st.session_state["show_my_runs"] = False  # nur eins anzeigen
+            st.button(
+                "➕ Neuen Lauf eintragen",
+                key="btn_add_run",
+                on_click=open_run_form
+            )
         
         with col2:
-            if st.button("👀 Meine Läufe anzeigen / ausblenden", key="btn_toggle_runs"):
-                st.session_state["show_my_runs"] = not st.session_state.get("show_my_runs", False)
-                st.session_state["show_run_form"] = False  # nur eins anzeigen
+            st.button(
+                "👀 Meine Läufe anzeigen / ausblenden",
+                key="btn_toggle_runs",
+                on_click=toggle_my_runs
+            )
 
     
         # Formular für neuen Lauf
         if st.session_state["show_run_form"]:
-            st.markdown("### 🏃 Lauf eintragen (Bild/Screenshot als Beleg)")
+            st.markdown(
+            f'<h3 style="color: white;">🏃 Lauf eintragen (Bild/Screenshot als Beleg)</h3>',
+            unsafe_allow_html=True
+            )
+
             with st.form("run_form", clear_on_submit=True):
                 col1_f, col2_f = st.columns([2, 2])
                 with col1_f:
@@ -1486,12 +1830,44 @@ def show():
                     "📸 Beweisbild (Screenshot / Foto vom Laufband)",
                     type=["png", "jpg", "jpeg"]
                 )
+                
+                comment = st.text_area(
+                "💬 Bei anderen Aktivitäten als klassischen Läufen hier bitte kurz vermerken um welche Aktivität es sich handelt",
+                placeholder="z. B. Hallenkick",
+                max_chars=300
+                )
     
                 submit = st.form_submit_button("Eintragen")
+                
+            if user not in st.session_state.get("active_users_this_week", []):
+                st.warning("Du bist diese Woche nicht als Teilnehmer registriert.")
+                return
+                
+            elif submit and not challenge_started:
+                st.markdown(
+                """
+                <div style="
+                    background-color: #011848;
+                    color: #ffffff;
+                    padding: 12px 16px;
+                    border-radius: 10px;
+                    font-weight: 600;
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+                ">
+                    <span style="font-size: 1.2em;">ℹ️</span>
+                    <span>Die Laufchallenge hat noch nicht begonnen. Läufe können erst ab dem Startdatum eingetragen werden.</span>
+                </div>
+                """,
+                unsafe_allow_html=True
+                )
     
-            if submit:
+            elif submit:
                 total_seconds = minutes * 60 + seconds
                 dist_m = int(dist_km * 1000)
+                
     
                 if dist_m <= 0 or total_seconds <= 0:
                     st.error("Bitte gültige Distanz und Zeit eingeben.")
@@ -1501,20 +1877,27 @@ def show():
                     st.error("Bitte lade ein Beweisbild hoch.")
                     return
     
-                image_b64 = base64.b64encode(proof_image.read()).decode("utf-8")
-    
+                image_bytes = proof_image.read()
+                image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+                
+                exif_data = extract_exif_metadata(image_bytes)
+                
+
                 runs_by_user = load_runs()
                 norm_user = normalize_name(user)
                 runs_by_user.setdefault(norm_user, [])
-    
+                from datetime import timezone
                 runs_by_user[norm_user].append({
                     "dist": dist_m,
                     "duration": total_seconds,
                     "time": datetime.now(),
+                    "comment": comment.strip() if comment else "",   # 👈 NEU
                     "proof_image": {
                         "name": proof_image.name,
                         "type": proof_image.type,
-                        "data": image_b64
+                        "data": image_b64,
+                        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+                        "exif": exif_data
                     },
                     "admin_confirmed": False,  # neu
                     "editable": True           # neu
@@ -1523,7 +1906,16 @@ def show():
     
                 st.session_state["runs_by_user"] = runs_by_user
                 save_runs(runs_by_user)
-    
+                
+                try:
+                    send_new_run_mail(
+                        run=runs_by_user[norm_user][-1],
+                        user_display=user
+                    )
+                except Exception as e:
+                    pass
+                    
+                    
                 st.success(f"✅ Lauf gespeichert: {dist_km:.2f} km in {minutes}:{seconds:02d} min")
                 import time as time_sleep
                 time_sleep.sleep(1)
@@ -1539,73 +1931,156 @@ def show():
     def edit_run_form(user, run_index, run, admin=False):
         import base64
         from datetime import datetime
+        
     
         with st.form(f"edit_form_{user}_{run_index}"):
-            dist_km = st.number_input("Distanz (km)", min_value=0.0, step=0.1, value=run["dist"]/1000)
-            duration = run.get("duration", 0)
-            minutes = st.number_input("Minuten", min_value=0, step=1, value=duration//60)
-            seconds = st.number_input("Sekunden", min_value=0, max_value=59, step=1, value=duration%60)
+            dist_km = st.number_input(
+                "Distanz (km)",
+                min_value=0.0,
+                step=0.1,
+                value=run["dist"] / 1000
+            )
     
-            # Vorhandenes Bild anzeigen
+            duration = run.get("duration", 0)
+            minutes = st.number_input("Minuten", min_value=0, step=1, value=duration // 60)
+            seconds = st.number_input("Sekunden", min_value=0, max_value=59, step=1, value=duration % 60)
+    
+            # ✅ EDITIERBARER KOMMENTAR
+            comment = st.text_area(
+                "💬 Kommentar",
+                value=run.get("comment", ""),
+                max_chars=300
+            )
+    
             proof = run.get("proof_image")
             if proof and "data" in proof:
                 image_bytes = base64.b64decode(proof["data"])
                 st.image(image_bytes, caption=f"Aktuelles Beweisbild – {proof.get('name','')}")
     
-            # Optionales neues Bild
-            proof_image = st.file_uploader("📸 Neues Beweisbild (optional)", type=["png", "jpg", "jpeg"])
+            proof_image = st.file_uploader(
+                "📸 Neues Beweisbild (optional)",
+                type=["png", "jpg", "jpeg"]
+            )
     
             submit = st.form_submit_button("Speichern")
+            if submit:
+                total_seconds = minutes * 60 + seconds
+                dist_m = int(dist_km * 1000)
+        
+                runs_by_user = load_runs()
+                run_entry = runs_by_user[user][run_index]
+        
+                run_entry["dist"] = dist_m
+                run_entry["duration"] = total_seconds
+                run_entry["comment"] = comment.strip() if comment else ""
+                from zoneinfo import ZoneInfo
+                run_entry["time"] = datetime.now(ZoneInfo("Europe/Berlin"))
     
-        if submit:
-            total_seconds = minutes * 60 + seconds
-            dist_m = int(dist_km * 1000)
-            runs_by_user = load_runs()
-            runs_by_user[user][run_index]["dist"] = dist_m
-            runs_by_user[user][run_index]["duration"] = total_seconds
-            
-            # ... speichere Änderungen ...
-            save_runs(runs_by_user)
-            st.success("Lauf erfolgreich bearbeitet!")
-            # Formular schließen
-            st.session_state["edit_run_index"] = None
-            st.session_state["edit_run_user"] = None
-            st.rerun()
+        
+                if proof_image is not None:
+                    from datetime import timezone
 
-    
-            # Nur überschreiben, wenn neues Bild hochgeladen wird
-            if proof_image is not None:
-                image_b64 = base64.b64encode(proof_image.read()).decode("utf-8")
-                runs_by_user[user][run_index]["proof_image"] = {
-                    "name": proof_image.name,
-                    "type": proof_image.type,
-                    "data": image_b64
-                }
-    
-            if not admin:
-                runs_by_user[user][run_index]["editable"] = True
-    
-            save_runs(runs_by_user)
-            st.success("Lauf erfolgreich bearbeitet!")
-            st.rerun()
+                    image_bytes = proof_image.read()
+                    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+                    
+                    exif_data = extract_exif_metadata(image_bytes)
+                    
+                    run_entry["proof_image"] = {
+                        "name": proof_image.name,
+                        "type": proof_image.type,
+                        "data": image_b64,
+                        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+                        "exif": exif_data
+                    }
+
+        
+                if not admin:
+                    run_entry["editable"] = True
+        
+                save_runs(runs_by_user)
+        
+                st.success("✅ Lauf erfolgreich bearbeitet!")
+                st.session_state["edit_run_index"] = None
+                st.session_state["edit_run_user"] = None
+                st.rerun()
 
 
 
     def show_user_runs_overview():
         import base64
+        from datetime import datetime as dt
+    
+        from zoneinfo import ZoneInfo
+        
+        tz = ZoneInfo("Europe/Berlin")
+        
     
         user = st.session_state.get("user")
         if not user:
             st.warning("Bitte zuerst einloggen, um deine Läufe einzusehen.")
             return
     
-        st.markdown("### 🏃 Deine bisher eingetragenen Läufe")
+        
+            st.markdown(
+            f'<h3 style="color: white;">🏃 Deine bisher eingetragenen Läufe"</h3>',
+            unsafe_allow_html=True
+            )
         runs_by_user = load_runs()
         norm_user = normalize_name(user)
         user_runs = runs_by_user.get(norm_user, [])
+        
+        start_datetime = st.session_state.get("CHALLENGE_START_DATETIME", None)
+
+        if start_datetime is None:
+            start_datetime = datetime.now(tz)
+        else:
+            # Falls start_datetime naive ist, auf aware konvertieren
+            if start_datetime.tzinfo is None:
+                start_datetime = start_datetime.replace(tzinfo=tz)
+        now = dt.now(tz)
+        
+        if start_datetime>now:
+            st.markdown(
+                        """
+                        <div style="
+                            background-color: #011848;
+                            color: #ffffff;
+                            padding: 12px 16px;
+                            border-radius: 10px;
+                            font-weight: 600;
+                            display: flex;
+                            align-items: center;
+                            gap: 8px;
+                            box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+                        ">
+                            <span style="font-size: 1.2em;">ℹ️</span>
+                            <span>Die Challenge beginnt demnächst. Noch keine Läufe vorhanden.
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                        )
     
-        if not user_runs:
-            st.info("Du hast noch keine Läufe eingetragen.")
+        elif not user_runs:
+
+            st.markdown(
+                        """
+                        <div style="
+                            background-color: #011848;
+                            color: #ffffff;
+                            padding: 12px 16px;
+                            border-radius: 10px;
+                            font-weight: 600;
+                            display: flex;
+                            align-items: center;
+                            gap: 8px;
+                            box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+                        ">
+                            <span style="font-size: 1.2em;">ℹ️</span>
+                            <span>Du hast noch keine Läufe eingetragen.
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                        )
             return
     
         dt_start, dt_end = get_challenge_start_end()
@@ -1633,6 +2108,22 @@ def show():
             st.markdown(
                 f"**#{i}** 📅 {run_time.strftime('%d.%m.%Y %H:%M')} 📏 **{dist_km:.2f} km** ⏱ **{minutes}:{seconds:02d} min**"
             )
+            run_comment = run.get("comment", "").strip()
+            if run_comment:
+                st.markdown(
+                    f"""
+                    <div style="
+                        background: rgba(255,255,255,0.08);
+                        padding: 8px 12px;
+                        border-radius: 8px;
+                        margin-top: 6px;
+                        font-size: 0.85em;
+                    ">
+                        💬 {escape_html(run_comment)}
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
     
             proof = run.get("proof_image")
             if proof and "data" in proof:
@@ -1640,12 +2131,31 @@ def show():
                 st.image(image_bytes, caption=f"Beweisbild – {proof.get('name','')}")
     
             if admin_confirmed:
-                st.info("✅ Bestätigt durch Admin")
+                st.markdown(
+                """
+                <div style="
+                    background-color: #011848;
+                    color: #ffffff;
+                    padding: 12px 16px;
+                    border-radius: 10px;
+                    font-weight: 600;
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+                ">
+                    <span style="font-size: 1.2em;">ℹ️</span>
+                    <span>✅ Bestätigt durch Admin</span>
+                </div>
+                """,
+                unsafe_allow_html=True
+                )
             elif editable:
                 # Button zum Bearbeiten
                 if st.button(f"Lauf #{i} bearbeiten", key=f"edit_user_{i}"):
                     st.session_state["edit_run_index"] = i-1
                     st.session_state["edit_run_user"] = norm_user
+                    st.rerun()
     
             # **Formular direkt unter dem aktuellen Lauf anzeigen**
             if edit_index == i-1 and edit_user == norm_user:
@@ -1659,261 +2169,304 @@ def show():
             st.divider()
 
 
+
+
+
+
+
+    import math
+    
     def show_lotterie_kacheln():
-        import streamlit as st
-        import streamlit.components.v1 as components
-        import textwrap
+        preise = st.session_state.get("lotterie_preise", [
+            {"icon": "🎁", "text": "VH-Gutschein 75€"},
+            {"icon": "🎁", "text": "Mawell-Gutschein 50€"},
+            {"icon": "🎁", "text": "11Teamsports-Gutschein 50€"},
+        ])
     
-        # ---------- Default-Preise ----------
-        if "lotterie_preise" not in st.session_state:
-            st.session_state["lotterie_preise"] = [
-                {"icon": "🎁", "text": "Tolles Buchpaket"},
-                {"icon": "☕", "text": "Café-Gutschein"},
-                {"icon": "🛠️", "text": "Cooles Gadget"},
-            ]
+        n = len(preise)
+        
+        # Maximal 3 Kacheln pro Reihe
+        max_cols = 3
+        rows_needed = math.ceil(n / max_cols)
     
-        preise = st.session_state["lotterie_preise"]
-    
-        # ---------- HTML / CSS ----------
-        html = textwrap.dedent("""
-            <style>
-                .lotterie-row {
-                    display: flex;
-                    justify-content: center;
-                    gap: 16px;
-                    margin: 10px 0 25px 0;
-                }
-                .lotterie-tile {
-                    width: 150px;
-                    height: 140px;
-                    background: linear-gradient(135deg, #1e3c72, #2a5298);
-                    border-radius: 12px;
-                    padding: 12px 8px;
-                    text-align: center;
-                    color: #ffffff;  /* weiße Schrift wie bei den Podiums-Kacheln */
-                    font-weight: 600; /* fetter wie bei den anderen Kacheln */
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
-                    display: flex;
-                    flex-direction: column;
-                    justify-content: center;
-                    transition: transform 0.2s ease, box-shadow 0.2s ease;
-                }
-                .lotterie-tile:hover {
-                    transform: translateY(-4px);
-                    box-shadow: 0 8px 18px rgba(0,0,0,0.35);
-                }
-                .tile-icon {
-                    font-size: 1.5em;
-                    margin-bottom: 6px;
-                }
-                .tile-text {
-                    font-size: 0.85em;
-                    font-weight: 600;
-                    line-height: 1.2em;
-                }
-                @media (max-width: 600px) {
-                    .lotterie-row {
-                        flex-direction: column;
-                        align-items: center;
-                    }
-                    .lotterie-tile {
-                        width: 180px;
-                    }
-                }
-            </style>
-            <div class="lotterie-row">
-        """)
-    
-        # ---------- Kacheln ----------
-        for preis in preise[:3]:  # maximal 3 anzeigen
-            icon = preis.get("icon", "🎁")
-            text = preis.get("text", "")
-            html += f"""
-                <div class="lotterie-tile">
-                    <div class="tile-icon">{icon}</div>
-                    <div class="tile-text">{text}</div>
-                </div>
-            """
-    
-        html += "</div>"
-    
-        # ---------- Render ----------
-        components.html(html, height=180)
-
-
-
+        index = 0
+        for r in range(rows_needed):
+            cols_in_row = min(max_cols, n - index)
+            cols = st.columns(cols_in_row, gap="medium")
+            for col in cols:
+                preis = preise[index]
+                with col:
+                    st.markdown(
+                        f"""
+                        <div style="
+                            height: 140px;
+                            background: linear-gradient(135deg, #1e3c72, #2a5298);
+                            border-radius: 12px;
+                            color: white;
+                            font-weight: 600;
+                            display: flex;
+                            flex-direction: column;
+                            justify-content: center;
+                            align-items: center;
+                            text-align: center;
+                            padding: 12px 8px;
+                        ">
+                            <div style="font-size: 2em; margin-bottom: 8px;">{preis['icon']}</div>
+                            <div style="font-size: 0.9em; line-height: 1.2em;">{preis['text']}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                index += 1
+        st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
 
 
     def show_weekly_ranking_dashboard():
-        from datetime import datetime
         import streamlit as st
         import pandas as pd
         import numpy as np
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
     
+        tz = ZoneInfo("Europe/Berlin")
+    
+        # ----------------- Session State -----------------
         runs_by_user = st.session_state.get("runs_by_user", {})
         all_users = st.session_state.get("active_users_this_week", [])
         wochenziel = st.session_state.get("WOCHENZIEL", 5000)
+        ranking_mode = st.session_state.get("RANKING_MODE", "distance_then_speed")
+        aktuelle_woche = st.session_state.get("WOCHENNUMMER", 1)
     
-        dt_start, dt_end = get_challenge_start_end()
+        dt_start, dt_end = get_challenge_week_start_end(aktuelle_woche)
+        dt_prev_start, dt_prev_end = get_challenge_week_start_end(aktuelle_woche - 1 if aktuelle_woche > 1 else 1)
+        
         rows = []
     
-        # ---------- Daten aufbereiten ----------
+        # ----------------- Daten aufbereiten -----------------
         for username in all_users:
             norm_user = normalize_name(username)
             runs = runs_by_user.get(norm_user, [])
     
-            week_runs = []
-            for r in runs:
-                t = r.get("time")
-                if isinstance(t, str):
-                    try:
-                        t = datetime.fromisoformat(t)
-                    except Exception:
-                        continue
-                if isinstance(t, datetime) and dt_start <= t <= dt_end:
-                    week_runs.append(r)
-    
-            total_dist = sum(
-                r.get("dist", 0)
-                for r in week_runs
-                if isinstance(r.get("dist"), (int, float))
-            )
-    
-            best_speed = None
-            for r in week_runs:
-                dist = r.get("dist", 0)
-                dur = r.get("duration", 0)
-                if dist > 0 and dur > 0:
-                    speed = (dist / 1000) / (dur / 3600)
-                    if best_speed is None or speed > best_speed:
-                        best_speed = speed
-    
+            # Aktuelle Woche
+            week_runs = filter_runs_for_week(runs, dt_start, dt_end)
+            total_dist = sum(r.get("dist", 0) for r in week_runs if isinstance(r.get("dist"), (int, float)))
+            best_speed = get_best_avg_speed_kmh(week_runs) or 0
             ziel_ok = total_dist >= wochenziel
     
+            # Vorwoche
+            prev_week_runs = filter_runs_for_week(runs, dt_prev_start, dt_prev_end)
+            prev_total_dist_tmp = sum(r.get("dist", 0) for r in prev_week_runs if isinstance(r.get("dist"), (int, float)))
+            prev_total_dist=max(prev_total_dist_tmp,6000)
             rows.append({
-                "Platz": 0,  # wird später gesetzt
+                "Platz": 0,
                 "Name": username,
-                "Distanz (km)": total_dist / 1000 if total_dist else np.nan,
-                "Top-Speed (km/h)": best_speed if best_speed is not None else np.nan,
+    
+                # Anzeige
+                "Distanz (km)": total_dist / 1000,
+                "Distanz Vorwoche (km)": prev_total_dist / 1000,
+                "Top-Speed (km/h)": best_speed,
                 "Wochenziel": "Ja" if ziel_ok else "Nein",
-                "Lotterie (%)": 0,  # wird später berechnet
-                "Ziel_bool": ziel_ok  # für Styling falls gewünscht
+                "Lotterie (%)": 0,
+    
+                # interne Felder
+                "_dist_raw": total_dist,
+                "_best_speed": best_speed,
+                "_weighted_dist": None,
+                "_prev_dist_raw": prev_total_dist,
+                "Ziel_bool": ziel_ok
             })
     
-        # ---------- Sortieren & Platz ----------
-        rows.sort(key=lambda x: x["Distanz (km)"] if not pd.isna(x["Distanz (km)"]) else 0, reverse=True)
+        # ----------------- Gewichtete Distanz -----------------
+        if ranking_mode == "weighted_distance":
+            for r in rows:
+                prev = r["_prev_dist_raw"]
+                curr = r["_dist_raw"]
+    
+                if prev <= 0:
+                    r["_weighted_dist"] = curr * 2
+                elif curr <= prev:
+                    r["_weighted_dist"] = curr
+                else:
+                    r["_weighted_dist"] = prev + (curr - prev) * 2
+    
+        # ----------------- Sortierung -----------------
+        if ranking_mode == "distance_only":
+            rows.sort(key=lambda x: x["_dist_raw"], reverse=True)
+        elif ranking_mode == "speed_only":
+            rows.sort(key=lambda x: x["_best_speed"], reverse=True)
+        elif ranking_mode == "distance_then_speed":
+            rows.sort(key=lambda x: (x["_dist_raw"], x["_best_speed"]), reverse=True)
+        elif ranking_mode == "weighted_distance":
+            rows.sort(key=lambda x: (x["_weighted_dist"], x["_best_speed"]), reverse=True)
+    
+        # ----------------- Platz & Lotterie -----------------
         for i, r in enumerate(rows, start=1):
             r["Platz"] = i
             r["Lotterie (%)"] = platz_lotterie_prozent(i, r["Ziel_bool"])
     
-        # ---------- DataFrame bauen ----------
+        # ----------------- DataFrame bauen -----------------
         df = pd.DataFrame(rows)
     
-        # NaN in "-" umwandeln und Zahlen formatieren
-        df["Top-Speed (km/h)"] = df["Top-Speed (km/h)"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
-        df["Distanz (km)"] = df["Distanz (km)"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
-        df["Lotterie (%)"] = df["Lotterie (%)"].apply(lambda x: f"{x:.1f}" if x > 0 else "-")
+        # Bonus-Spalte direkt nach aktueller Distanz
+        if ranking_mode == "weighted_distance":
+            df.insert(
+                df.columns.get_loc("Distanz (km)") + 2,
+                "Distanz inkl. Bonus (km)",
+                df["_weighted_dist"].fillna(0) / 1000
+            )
     
-        # ---------- Tabelle rendern ----------
-        st.dataframe(df.drop(columns=["Ziel_bool"]), use_container_width=True, hide_index=True)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    def show_admin_runs_overview():
-        import base64
-        st.markdown("### 🏃 Eingetragene Läufe aller Nutzer")
-        runs_by_user = load_runs()
-        dt_start, dt_end = get_challenge_start_end()
+        # Vorwoche nur im weighted-Modus anzeigen
+        if ranking_mode != "weighted_distance":
+            df = df.drop(columns=["Distanz Vorwoche (km)"], errors="ignore")
     
-        for username, runs in runs_by_user.items():
-            if not runs: continue
-            with st.expander(f"👤 {username} ({len(runs)} Läufe)", expanded=False):
-                for i, run in enumerate(runs, start=1):
-                    run_time = run.get("time")
-                    if isinstance(run_time, str):
-                        from datetime import datetime
-                        run_time = datetime.fromisoformat(run_time)
-                    if not (dt_start <= run_time <= dt_end):
-                        continue
+        # ----------------- Formatierung -----------------
+        for col in ["Distanz (km)", "Distanz Vorwoche (km)", "Distanz inkl. Bonus (km)"]:
+            if col in df.columns:
+                df[col] = df[col].fillna(0).apply(lambda x: f"{x:.2f}")
     
-                    dist_km = run.get("dist", 0) / 1000
-                    duration = run.get("duration", 0)
-                    minutes = duration // 60
-                    seconds = duration % 60
-                    admin_confirmed = run.get("admin_confirmed", False)
+        df["Top-Speed (km/h)"] = df["Top-Speed (km/h)"].apply(lambda x: f"{x:.1f}" if x > 0 else "0.0")
+        df["Lotterie (%)"] = df["Lotterie (%)"].apply(lambda x: f"{x:.1f}" if x > 0 else "0.0")
     
-                    st.markdown(
-                        f"**#{i}** 📅 {run_time.strftime('%d.%m.%Y %H:%M')} 📏 **{dist_km:.2f} km** ⏱ **{minutes}:{seconds:02d} min**"
-                    )
+        # interne Spalten entfernen
+        df = df.drop(columns=["_dist_raw", "_best_speed", "_weighted_dist", "_prev_dist_raw", "Ziel_bool"], errors="ignore")
     
-                    proof = run.get("proof_image")
-                    if proof and "data" in proof:
-                        image_bytes = base64.b64decode(proof["data"])
-                        st.image(image_bytes, caption=f"Beweisbild – {proof.get('name','')}")
-
+        # ----------------- Styling -----------------
+        styled_df = (
+            df.style
+            .set_properties(**{
+                "background-color": "black",
+                "color": "white",
+                "border-color": "#333"
+            })
+            .set_table_styles([
+                {"selector": "th", "props": [
+                    ("background-color", "#011848"),
+                    ("color", "white"),
+                    ("font-weight", "bold")
+                ]}
+            ])
+        )
     
-                    # Admin kann bearbeiten
-                    if st.button(f"Lauf #{i} bearbeiten", key=f"edit_admin_{username}_{i}"):
-                        edit_run_form(username, i-1, run, admin=True)
-    
-                    # Admin kann bestätigen
-                    if not admin_confirmed:
-                        if st.button(f"✅ Lauf #{i} bestätigen", key=f"confirm_{username}_{i}"):
-                            runs_by_user[username][i-1]["admin_confirmed"] = True
-                            runs_by_user[username][i-1]["editable"] = False
-                            save_runs(runs_by_user)
-                            st.success("Lauf bestätigt!")
-                            st.rerun()
-    
-                    elif admin_confirmed:
-                        st.info("✅ Bestätigt")
-    
-                    st.divider()
+        # ----------------- Render -----------------
+        st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
 
-    # Vor dem Aufruf der Kacheln einmal die Rangliste berechnen
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def sort_ranking_by_best_speed(rows):
+        return sorted(
+            rows,
+            key=lambda x: (
+                x.get("best_speed") if x.get("best_speed") is not None else 0,
+                x.get("dist", 0)
+            ),
+            reverse=True
+    )
+
+
+
+
+    
+
+
     def update_rangliste():
+        import streamlit as st
         from datetime import datetime
+        from zoneinfo import ZoneInfo
+    
+        tz = ZoneInfo("Europe/Berlin")
+    
+        # ----------------- Session State -----------------
         runs_by_user = st.session_state.get("runs_by_user", {})
         all_users = st.session_state.get("active_users_this_week", [])
         wochenziel = st.session_state.get("WOCHENZIEL", 5000)
-        dt_start, dt_end = get_challenge_start_end()
+        ranking_mode = st.session_state.get("RANKING_MODE", "distance_then_speed")
+        aktuelle_woche = st.session_state.get("WOCHENNUMMER", 1)
+    
+        # Aktuelle Woche
+        dt_start, dt_end = get_challenge_week_start_end(aktuelle_woche)
+        # Vorwoche (wenn aktuelle_woche == 1, dann fallback auf Woche 1)
+        dt_prev_start, dt_prev_end = get_challenge_week_start_end(aktuelle_woche - 1 if aktuelle_woche > 1 else 1)
     
         rows = []
+    
+        # ----------------- Daten sammeln -----------------
         for username in all_users:
             norm_user = normalize_name(username)
             runs = runs_by_user.get(norm_user, [])
-            week_runs = [r for r in runs if isinstance(r.get("time"), datetime) and dt_start <= r["time"] <= dt_end]
-            total_dist = sum(r.get("dist",0) for r in week_runs)
-            best_speed = None
-            for r in week_runs:
-                dist = r.get("dist", 0)
-                dur = r.get("duration", 0)
-                if dist > 0 and dur > 0:
-                    speed = (dist / 1000) / (dur / 3600)
-                    if best_speed is None or speed > best_speed:
-                        best_speed = speed
-            ziel_ok = total_dist >= wochenziel
-            rows.append({"name": username, "dist": total_dist, "best_speed": best_speed, "ziel": ziel_ok})
     
-        rows.sort(key=lambda x: x["dist"], reverse=True)
+            # Aktuelle Woche
+            week_runs = filter_runs_for_week(runs, dt_start, dt_end)
+            total_dist = sum(r.get("dist", 0) for r in week_runs if isinstance(r.get("dist"), (int, float)))
+            best_speed = get_best_avg_speed_kmh(week_runs) or 0
+            ziel_ok = total_dist >= wochenziel
+    
+            # Vorwoche
+            prev_week_runs = filter_runs_for_week(runs, dt_prev_start, dt_prev_end)
+            prev_total_dist_tmp = sum(r.get("dist", 0) for r in prev_week_runs if isinstance(r.get("dist"), (int, float)))
+            prev_total_dist=max(prev_total_dist_tmp,6000)
+            rows.append({
+                "name": username,
+                "_dist_raw": total_dist,
+                "_best_speed": best_speed,
+                "_weighted_dist": None,
+                "_prev_dist_raw": prev_total_dist,
+                "ziel": ziel_ok,
+                "dist": total_dist,
+                "best_speed_public": best_speed,
+                "prev_dist_public": prev_total_dist
+            })
+    
+        # ----------------- Gewichtete Distanz -----------------
+        if ranking_mode == "weighted_distance":
+            for r in rows:
+                curr = r["_dist_raw"]
+                prev = r["_prev_dist_raw"]
+    
+                if prev <= 0:
+                    r["_weighted_dist"] = curr * 2
+                elif curr <= prev:
+                    r["_weighted_dist"] = curr
+                else:
+                    r["_weighted_dist"] = prev + (curr - prev) * 2
+    
+        # ----------------- Sortierung -----------------
+        if ranking_mode == "distance_only":
+            rows.sort(key=lambda x: x["_dist_raw"], reverse=True)
+        elif ranking_mode == "speed_only":
+            rows.sort(key=lambda x: x["_best_speed"], reverse=True)
+        elif ranking_mode == "distance_then_speed":
+            rows.sort(key=lambda x: (x["_dist_raw"], x["_best_speed"]), reverse=True)
+        elif ranking_mode == "weighted_distance":
+            rows.sort(key=lambda x: (x["_weighted_dist"], x["_best_speed"]), reverse=True)
+    
+        # ----------------- Platz & Lotterie -----------------
         for i, r in enumerate(rows, start=1):
             r["platz"] = i
             r["lotto"] = platz_lotterie_prozent(i, r["ziel"])
     
         st.session_state["rangliste_rows"] = rows
+
+
+        
+        
+        
     
     # Aktualisieren bevor Kacheln angezeigt werden
     update_rangliste()
@@ -1937,78 +2490,887 @@ def show():
         unsafe_allow_html=True
     )
     
-    st.markdown('<div class="dashboard-tiles-bar" role="region" aria-label="Übersicht">', unsafe_allow_html=True)
-    col_tile1, col_tile2, col_tile3 = st.columns(3)
-    with col_tile1:
-        show_rank_tile(user) 
-        st.markdown('</section>', unsafe_allow_html=True)
-    with col_tile2:
-        show_podium_tile()
-        st.markdown('</section>', unsafe_allow_html=True)
-    with col_tile3:
-        show_batterie_tile()
-        st.markdown('</section>', unsafe_allow_html=True)
+    st.markdown("""
+        <style>
+        .dashboard-tiles-bar {
+        background: #011848;
+        padding: 16px;
+        border-radius: 14px;
+        }
+    </style>
+    """, unsafe_allow_html=True)
     
-    
-    col_tile4, col_tile5, col_tile6 = st.columns(3)
-    with col_tile4:
-        show_bottom3_tile()        
-        st.markdown('</section>', unsafe_allow_html=True)
-    with col_tile5:
-        show_countdown_tile()
-        st.markdown('</section>', unsafe_allow_html=True)
-    with col_tile6:
-        show_week_tile() 
-        st.markdown('</section>', unsafe_allow_html=True)
+    with st.expander("Übersicht", expanded=True):
+        st.markdown('<div class="dashboard-tiles-bar" role="region" aria-label="Übersicht">', unsafe_allow_html=True)
+        col_tile1, col_tile2, col_tile3 = st.columns(3)
+        with col_tile1:
+            show_rank_tile(user) 
+            st.markdown('</section>', unsafe_allow_html=True)
+        with col_tile2:
+            show_podium_tile()
+            st.markdown('</section>', unsafe_allow_html=True)
+        with col_tile3:
+            show_batterie_tile()
+            st.markdown('</section>', unsafe_allow_html=True)
+        
+        
+        col_tile4, col_tile5, col_tile6 = st.columns(3)
+        with col_tile4:
+            show_bottom3_tile()        
+            st.markdown('</section>', unsafe_allow_html=True)
+        with col_tile5:
+            show_countdown_tile()
+            st.markdown('</section>', unsafe_allow_html=True)
+        with col_tile6:
+            show_week_tile() 
+            st.markdown('</section>', unsafe_allow_html=True)
         
 
     
 
-    
-    st.markdown(f"## 🏆 Laufrangliste – Woche {aktuelle_woche}")
-    show_weekly_ranking_dashboard()
-    
-    add_run_entry()
-    if is_admin():
-        admin_module()
-        
-        # ------------------ Preise aus session_state oder Standardliste ------------------
-    if "lotterie_preise" not in st.session_state:
-       # Standardwerte, falls Admin noch nichts gesetzt hat
-       st.session_state["lotterie_preise"] = [
-           {"name": "Preis 1", "beschreibung": "Ein tolles Buchpaket", "icon": "🎁"},
-           {"name": "Preis 2", "beschreibung": "Gutschein für ein Café", "icon": "☕"},
-           {"name": "Preis 3", "beschreibung": "Ein cooles Gadget", "icon": "🛠️"},
-       ]
-
-    st.markdown(f"## 💰 Preise Lotterie – Woche {aktuelle_woche}")
-    st.markdown("Der Gewinner der Lotterie zur Laufchallenge dieser Woche darf einen der folgenden Preise auswählen:")
-
-    show_lotterie_kacheln()
-
-    # Klick auswerten
-    # Klick auswerten (NEUE Streamlit-API)
-    if st.button(
-        "Zur Lotterieansicht wechseln",
-        use_container_width=True,
-        key="go_lotterie"
-    ):
-        st.session_state["page"] = "lotterie"
-        st.rerun()
-    
-    st.markdown(f"## 💡 Informationen zum Modus - Woche {aktuelle_woche}")
-    
-    if st.session_state['admin_info_text']:
+    with st.expander("Laufrangliste", expanded=False):
         st.markdown(
-            f"<div class='infotext-admin-box'>{escape_html(st.session_state['admin_info_text'])}</div>",
-            unsafe_allow_html=True
+        f'<h2 style="color: white;">🏆 Laufrangliste – Woche {max(aktuelle_woche,1)}</h2>',
+        unsafe_allow_html=True
         )
+        show_weekly_ranking_dashboard()
     
+        
+
+
+
+    with st.expander("Lotterie", expanded=False):
+        # ------------------ Preise aus session_state oder Standardliste ------------------
+        if "lotterie_preise" not in st.session_state:
+           # Standardwerte, falls Admin noch nichts gesetzt hat
+           st.session_state["lotterie_preise"] = [
+               {"name": "Preis 1", "beschreibung": "Ein tolles Buchpaket", "icon": "🎁"},
+               {"name": "Preis 2", "beschreibung": "Gutschein für ein Café", "icon": "☕"},
+               {"name": "Preis 3", "beschreibung": "Ein cooles Gadget", "icon": "🛠️"},
+           ]
+           
+        st.markdown(
+        f'<h2 style="color: white;">💰 Preise Lotterie – Woche {max(aktuelle_woche,1)}</h2>',
+        unsafe_allow_html=True
+        )
+        st.markdown("Der Gewinner der Lotterie zur Laufchallenge dieser Woche darf einen der folgenden Preise auswählen:")
     
-    st.markdown('</div>', unsafe_allow_html=True)
+        show_lotterie_kacheln()
+
+    
+        
+        # Klick auswerten
+        # Klick auswerten (NEUE Streamlit-API)
+        if st.button(
+            "Zur Lotterieansicht wechseln",
+            use_container_width=True,
+            key="go_lotterie"
+        ):
+            st.session_state["page"] = "lotterie"
+            st.rerun()
+    
+    with st.expander("Infos", expanded=False):
+        st.markdown(
+        f'<h2 style="color: white;">💡 Informationen zum Modus – Woche {max(aktuelle_woche,1)}</h2>',
+        unsafe_allow_html=True
+        )
+
+        
+        if st.session_state['admin_info_text']:
+            st.markdown(
+                f"<div class='infotext-admin-box'>{escape_html(st.session_state['admin_info_text'])}</div>",
+                unsafe_allow_html=True
+            )
+        
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    add_run_entry()
+   
+    if is_admin():
+        if st.button("🔑 Admin-Bereich"):
+            st.session_state["page"] = "admin"
+            st.rerun()
     
     if st.button("Abmelden", key="logout_btn_home"):
         do_logout()
         safe_rerun()
         st.markdown('</div>', unsafe_allow_html=True)
+        
+def show_admin_page():
+    
+    import streamlit as st
+    import pandas as pd
+    from datetime import datetime, timedelta, time
+    import html
+    import streamlit.components.v1 as components
+    import textwrap
+    from streamlit_autorefresh import st_autorefresh 
+    import time as time_sleep
+    import json
+    import os
+    import re
+    
+    RANKING_MODES = {
+    "Distanz (Standard)": "distance_then_speed",
+    "Nur Distanz": "distance_only",
+    "Nur Geschwindigkeit": "speed_only",
+    "Gewichtete Distanz (Bonus über Vorwoche)": "weighted_distance"
+    }
+
+    
+    GESAMT_WOCHEN = 5  # oder später aus Session/Admin konfigurierbar
+    
+    ADMIN_USERS = {
+        "sebastian",
+        "tobi",
+        "sergej"
+    }
+    SETTINGS_FILE = "settings.json"
+    RUNS_FILE = "data/runs_by_user.json"
+    
+    def save_settings(settings):
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2, ensure_ascii=False)
+
+
+    def load_runs():
+        from zoneinfo import ZoneInfo
+        if not os.path.exists(RUNS_FILE):
+            return {}
+    
+        tz = ZoneInfo("Europe/Berlin")  # deine Zeitzone
+    
+        try:
+            with open(RUNS_FILE, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+                for user, runs in raw.items():
+                    for run in runs:
+                        if "time" in run and isinstance(run["time"], str):
+                            dt = datetime.fromisoformat(run["time"])
+                            # 🔹 falls naive, tzinfo setzen
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=tz)
+                            run["time"] = dt
+                return raw
+        except Exception as e:
+            st.error(f"Ladefehler für Läufe: {e}")
+            return {}
+
+    
+    def extract_exif_metadata(image_bytes):
+                
+        from PIL import Image
+        from PIL.ExifTags import TAGS, GPSTAGS
+        from io import BytesIO
+        from datetime import datetime
+        try:
+            img = Image.open(BytesIO(image_bytes))
+            exif_raw = img._getexif()
+            if not exif_raw:
+                return {}
+    
+            exif = {TAGS.get(k, k): v for k, v in exif_raw.items()}
+    
+            result = {}
+    
+            # 📅 Aufnahmezeit
+            dt_original = exif.get("DateTimeOriginal")
+            if dt_original:
+                result["taken_at"] = datetime.strptime(dt_original, "%Y:%m:%d %H:%M:%S").isoformat()
+    
+            # 📍 GPS
+            gps_info = exif.get("GPSInfo")
+            if gps_info:
+                gps_data = {}
+                for key in gps_info:
+                    decoded = GPSTAGS.get(key, key)
+                    gps_data[decoded] = gps_info[key]
+    
+                def convert(coord):
+                    d, m, s = coord
+                    return float(d) + float(m)/60 + float(s)/3600
+    
+                lat = convert(gps_data["GPSLatitude"])
+                if gps_data.get("GPSLatitudeRef") == "S":
+                    lat = -lat
+    
+                lon = convert(gps_data["GPSLongitude"])
+                if gps_data.get("GPSLongitudeRef") == "W":
+                    lon = -lon
+    
+                result["gps"] = {"lat": lat, "lon": lon}
+    
+            return result
+    
+        except Exception:
+            return {}
+
+
+    
+    def is_admin():
+        user = st.session_state.get("user")
+        if not user:
+            return False
+        return user.lower() in ADMIN_USERS
+
+    if not is_admin():
+        st.error("⛔ Keine Berechtigung.")
+        return
+
+
+    st.markdown("## 🔑 Admin-Bereich")
+    
+
+    if st.button("⬅️ Zurück zum Dashboard"):
+        st.session_state["page"] = "dashboard"
+        st.rerun()
+
+    tab_settings, tab_runs = st.tabs([
+        "⚙️ Einstellungen",
+        "🏃 Läufe & Beweisbilder"
+    ])
+    
+    def save_runs(runs_by_user):
+        import os
+        import json
+        from datetime import datetime
+    
+        os.makedirs(os.path.dirname(RUNS_FILE), exist_ok=True)
+    
+        serializable = {}
+    
+        for user, runs in runs_by_user.items():
+            serializable[user] = []
+    
+            for r in runs:
+                r_copy = {}
+    
+                for key, value in r.items():
+                    if key == "time" and isinstance(value, datetime):
+                        r_copy[key] = value.isoformat()
+    
+                    elif key == "proof_image" and isinstance(value, dict):
+                        proof_copy = value.copy()
+    
+                        uploaded_at = proof_copy.get("uploaded_at")
+                        if isinstance(uploaded_at, datetime):
+                            proof_copy["uploaded_at"] = uploaded_at.isoformat()
+    
+                        r_copy["proof_image"] = proof_copy
+    
+                    else:
+                        r_copy[key] = value
+    
+                serializable[user].append(r_copy)
+    
+        with open(RUNS_FILE, "w", encoding="utf-8") as f:
+            json.dump(serializable, f, indent=2, ensure_ascii=False)
+
+    def delete_all_old_proof_images(hours=24):
+        from datetime import datetime, timedelta, timezone
+    
+        runs_by_user = load_runs()
+        now = datetime.now(timezone.utc)
+        deleted_count = 0
+    
+        for user, runs in runs_by_user.items():
+            for run in runs:
+                run_time = run.get("time")
+                if not run_time:
+                    continue
+    
+                # run_time normalisieren
+                if isinstance(run_time, str):
+                    try:
+                        run_dt = datetime.fromisoformat(run_time)
+                    except:
+                        continue
+                elif isinstance(run_time, datetime):
+                    run_dt = run_time
+                else:
+                    continue
+    
+                # Zeitzone auf UTC
+                if run_dt.tzinfo is None:
+                    run_dt = run_dt.replace(tzinfo=timezone.utc)
+                else:
+                    run_dt = run_dt.astimezone(timezone.utc)
+    
+                # Alte Beweisbilder löschen
+                if run.get("proof_image") and (now - run_dt >= timedelta(hours=hours)):
+                    run["proof_image"] = None
+                    deleted_count += 1
+    
+        if deleted_count > 0:
+            save_runs(runs_by_user)
+    
+        return deleted_count
+
+
+
+
+
+
+    
+    def get_challenge_start_end():
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Europe/Berlin")
+        start = st.session_state.get("CHALLENGE_START_DATETIME")
+        end = st.session_state.get("CHALLENGE_END_DATETIME")
+    
+        if not start:
+            now = datetime.now(tz)
+            start = now - timedelta(days=now.weekday())
+            start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+        if not end:
+            end = start + timedelta(days=6, hours=23, minutes=59, seconds=59)
+        
+        # Alles tz-aware
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=tz)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=tz)
+    
+        return start, end
+
+    
+    def edit_run_form(user, run_index, run, admin=False):
+        import base64
+        from datetime import datetime
+    
+        with st.form(f"edit_form_{user}_{run_index}"):
+            dist_km = st.number_input(
+                "Distanz (km)",
+                min_value=0.0,
+                step=0.1,
+                value=run["dist"] / 1000
+            )
+    
+            duration = run.get("duration", 0)
+            minutes = st.number_input("Minuten", min_value=0, step=1, value=duration // 60)
+            seconds = st.number_input("Sekunden", min_value=0, max_value=59, step=1, value=duration % 60)
+    
+            # ✅ EDITIERBARER KOMMENTAR
+            comment = st.text_area(
+                "💬 Kommentar",
+                value=run.get("comment", ""),
+                max_chars=300
+            )
+    
+            proof = run.get("proof_image")
+            if proof and "data" in proof:
+                image_bytes = base64.b64decode(proof["data"])
+                st.image(image_bytes, caption=f"Aktuelles Beweisbild – {proof.get('name','')}")
+    
+            proof_image = st.file_uploader(
+                "📸 Neues Beweisbild (optional)",
+                type=["png", "jpg", "jpeg"]
+            )
+    
+            submit = st.form_submit_button("Speichern")
+    
+        if submit:
+            total_seconds = minutes * 60 + seconds
+            dist_m = int(dist_km * 1000)
+    
+            runs_by_user = load_runs()
+            run_entry = runs_by_user[user][run_index]
+    
+            run_entry["dist"] = dist_m
+            run_entry["duration"] = total_seconds
+            run_entry["comment"] = comment.strip() if comment else ""
+            from zoneinfo import ZoneInfo  # Python 3.9+
+
+            run_entry["time"] = datetime.now(ZoneInfo("Europe/Berlin"))
+
+    
+            if proof_image is not None:
+                from datetime import timezone
+                image_bytes = proof_image.read()
+                image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+                
+                exif_data = extract_exif_metadata(image_bytes)
+                
+                run_entry["proof_image"] = {
+                    "name": proof_image.name,
+                    "type": proof_image.type,
+                    "data": image_b64,
+                    "uploaded_at": datetime.now(timezone.utc).isoformat(),
+                    "exif": exif_data
+                }
+    
+            if not admin:
+                run_entry["editable"] = True
+    
+            save_runs(runs_by_user)
+    
+            st.success("✅ Lauf erfolgreich bearbeitet!")
+            st.session_state["edit_run_index"] = None
+            st.session_state["edit_run_user"] = None
+            st.session_state[f"expander_open_{user}"] = True
+            st.rerun()
+
+
+    
+    def show_admin_runs_overview():
+        import base64
+        from datetime import datetime
+    
+        st.markdown("### 🏃 Eingetragene Läufe aller Nutzer")
+    
+        runs_by_user = load_runs()
+        dt_start, dt_end = get_challenge_start_end()
+    
+        edit_user = st.session_state.get("admin_edit_user")
+        edit_index = st.session_state.get("admin_edit_run_index")
+    
+        for username, runs in runs_by_user.items():
+            if not runs:
+                continue
+    
+            expander_key = f"expander_open_{username}"
+
+            with st.expander(
+                f"👤 {username} ({len(runs)} Läufe)",
+                expanded=st.session_state.get(expander_key, False)
+            ):
+
+                for i, run in enumerate(runs, start=1):
+                    run_time = run.get("time")
+                    if isinstance(run_time, str):
+                        run_time = datetime.fromisoformat(run_time)
+    
+                    if not (dt_start <= run_time <= dt_end):
+                        continue
+    
+                    dist_km = run.get("dist", 0) / 1000
+                    duration = run.get("duration", 0)
+                    minutes = duration // 60
+                    seconds = duration % 60
+                    admin_confirmed = run.get("admin_confirmed", False)
+                    
+                    from datetime import timedelta
+
+                    display_time = run_time + timedelta(hours=1)
+                    
+                    st.markdown(
+                        f"**#{i}** 📅 {display_time.strftime('%d.%m.%Y %H:%M')} "
+                        f"📏 **{dist_km:.2f} km** ⏱ **{minutes}:{seconds:02d} min**"
+                    )
+                    if run.get("comment", "").strip():
+                        comment = st.text_area(
+                            f"💬 Kommentar",
+                            value=run.get("comment", ""),
+                            max_chars=300,
+                            key=f"comment_{username}_{i}"
+                        )
+    
+                    # Beweisbild
+                    proof = run.get("proof_image")
+                    
+                    if proof and "data" in proof:
+                        image_bytes = base64.b64decode(proof["data"])
+                        st.image(image_bytes, caption=f"Beweisbild – {proof.get('name','')}")
+    
+                    # -------------------------
+                    # ✏️ Bearbeiten / Wechseln
+                    # -------------------------
+
+                    if st.button(
+                        f"✏️ Lauf #{i} bearbeiten",
+                        key=f"edit_admin_{username}_{i}"
+                    ):
+                        st.session_state["admin_edit_user"] = username
+                        st.session_state["admin_edit_run_index"] = i - 1
+                        st.session_state[f"expander_open_{username}"] = True
+                    
+                        # 👇 Scroll-Ziel merken
+                        st.session_state["scroll_to"] = f"scroll_target_{username}_{i}"
+                    
+                        st.rerun()
+
+    
+                    # -------------------------
+                    # Edit-Formular DIREKT UNTER DEM LAUF
+                    # -------------------------
+                    anchor_id = f"scroll_target_{username}_{i}"
+
+                    # unsichtbarer HTML-Anker
+                    components.html(
+                        f'<div id="{anchor_id}"></div>',
+                        height=0
+                    )
+                    if edit_user == username and edit_index == i - 1:
+                        st.markdown("#### ✏️ Lauf bearbeiten (Admin)")
+                        edit_run_form(
+                            user=username,
+                            run_index=i - 1,
+                            run=run,
+                            admin=True
+                        )
+    
+                    # -------------------------
+                    # ✅ Bestätigen
+                    # -------------------------
+                    if not admin_confirmed:
+                        if st.button(
+                            f"✅ Lauf #{i} bestätigen",
+                            key=f"confirm_{username}_{i}"
+                        ):
+                            runs_by_user[username][i - 1]["admin_confirmed"] = True
+                            runs_by_user[username][i - 1]["editable"] = False
+                            save_runs(runs_by_user)
+                            st.success("Lauf bestätigt!")
+                            st.rerun()
+                    else:
+                        st.markdown(
+                            """
+                            <div style="
+                                background-color: #011848;
+                                color: #ffffff;
+                                padding: 12px 16px;
+                                border-radius: 10px;
+                                font-weight: 600;
+                                display: flex;
+                                align-items: center;
+                                gap: 8px;
+                                box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+                            ">
+                                <span style="font-size: 1.2em;">ℹ️</span>
+                                <span>✅ Bestätigt</span>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+                    # ❌ Lauf löschen
+                    delete_key = f"delete_{username}_{i}"
+                    
+                    if st.button(f"❌ Lauf #{i} löschen", key=delete_key):
+                        runs_by_user[username].pop(i - 1)
+                        save_runs(runs_by_user)
+                    
+                        # Expander offen halten
+                        st.session_state[f"expander_open_{username}"] = True
+                    
+                        # Editierform schließen, falls offen
+                        st.session_state["admin_edit_run_index"] = None
+                        st.session_state["admin_edit_user"] = None
+                    
+                        st.success(f"Lauf #{i} von {username} wurde gelöscht!")
+                    
+                        # sofort neu laden, damit die gelöschte Zeile verschwindet
+                        st.experimental_rerun()
+
+                    if proof and "data" in proof:
+
+                        exif = proof.get("exif", {})
+
+                        if exif:
+                            st.markdown(
+                                "Metadaten"
+                            )
+                            cols = []
+                            
+                            if "taken_at" in exif:
+                                taken = datetime.fromisoformat(exif["taken_at"])
+                                cols.append(f"📅 Aufnahme: {taken.strftime('%d.%m.%Y %H:%M')}")
+                        
+                            gps = exif.get("gps")
+                            if gps:
+                                cols.append(f"📍 Ort: {gps['lat']:.5f}, {gps['lon']:.5f}")
+                        
+                            if cols:
+                                st.caption(" | ".join(cols))
+    
+                    st.divider()
+
+
+    
+    def admin_module():
+        if not is_admin():
+            st.error("⛔ Keine Berechtigung.")
+            return
+    
+    
+        # -------------------------------------------------
+        # TAB 1: EINSTELLUNGEN
+        # -------------------------------------------------
+        with tab_settings:
+
+            
+            st.markdown(
+                        """
+                        <div style="
+                            background-color: #011848;
+                            color: #ffffff;
+                            padding: 12px 16px;
+                            border-radius: 10px;
+                            font-weight: 600;
+                            display: flex;
+                            align-items: center;
+                            gap: 8px;
+                            box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+                        ">
+                            <span style="font-size: 1.2em;">ℹ️</span>
+                            <span>Hier können challenge-relevante Parameter angepasst werden. 
+                            Änderungen gelten sofort für alle!</span>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                        )
+    
+            # ---------- Basis-Einstellungen ----------
+            neue_woche = st.slider(
+                "Aktuelle Challenge-Woche",
+                min_value=0,
+                max_value=GESAMT_WOCHEN,
+                value=st.session_state["WOCHENNUMMER"]
+            )
+    
+            ziel = st.number_input(
+                "Wochenziel in Metern",
+                min_value=500,
+                max_value=100000,
+                value=st.session_state["WOCHENZIEL"],
+                step=100
+            )
+    
+            batterie = st.slider(
+                "Batterie-Schwellenwert (%)",
+                min_value=1,
+                max_value=100,
+                value=st.session_state["BATTERIE_SCHWELLE"]
+            )
+            
+            #st.markdown("### 🏆 Ranglisten-Modus")
+            
+            current_mode = st.session_state.get(
+                "RANKING_MODE",
+                "distance_then_speed"
+            )
+            
+            # Rückwärts-Mapping für Selectbox
+            mode_label_by_value = {v: k for k, v in RANKING_MODES.items()}
+            
+            selected_label = st.selectbox(
+                "Wie soll die Rangliste berechnet werden?",
+                options=list(RANKING_MODES.keys()),
+                index=list(RANKING_MODES.values()).index(current_mode)
+                if current_mode in RANKING_MODES.values()
+                else 0,
+                help=(
+                    "Legt fest, wie die Platzierung erfolgt.\n\n"
+                    "• Distanz: Gesamtkilometer\n"
+                    "• Geschwindigkeit: schnellster Lauf\n"
+                    "• Gewichtete Distanz: Bonus für Steigerung zur Vorwoche"
+                )
+            )
+            
+            selected_mode = RANKING_MODES[selected_label]
+
+
+
+
+    
+            info_text = st.text_area(
+                "Admin Infotext",
+                value=st.session_state["admin_info_text"]
+            )
+    
+    
+            enddt = st.date_input(
+                "Challenge-Enddatum",
+                value=st.session_state["CHALLENGE_END_DATETIME"].date()
+            )
+    
+            endtime = st.time_input(
+                "End-Uhrzeit",
+                value=st.session_state["CHALLENGE_END_DATETIME"].time()
+            )
+            
+            startdt = st.date_input(
+                "Challenge-Startdatum",
+                value=st.session_state.get("CHALLENGE_START_DATETIME", datetime.now()).date()
+            )
+            starttime = st.time_input(
+                "Start-Uhrzeit",
+                value=st.session_state.get("CHALLENGE_START_DATETIME", datetime.now()).time()
+            )
+            
+            teamziel_wochen = st.number_input(
+            "Teamziel erreicht in bisherigen Wochen",
+            min_value=0,
+            max_value=GESAMT_WOCHEN,
+            value=st.session_state.get("TEAMZIEL_WOCHEN_ERREICHT", 0),
+            step=1
+            )
+            
+
+
+            st.markdown("### 🏃 Aktive Teilnehmer auswählen (für diese Woche)")
+            
+
+            all_users_total = st.session_state.get("all_usernames", [])
+
+            selected_users = st.multiselect(
+                "Wer nimmt diese Woche teil?",
+                options=all_users_total,
+                default=st.session_state.get("active_users_this_week", all_users_total)
+            )
+    
+            # ---------- Lotteriepreise ----------
+
+
+            st.markdown("### 🎁 Lotterie-Wochenpreise konfigurieren")
+    
+            if "lotterie_preise" not in st.session_state:
+                st.session_state["lotterie_preise"] = [
+                    {"icon": "🎁", "text": "Tolles Buchpaket"},
+                    {"icon": "🎁", "text": "Café-Gutschein"},
+                    {"icon": "🎁", "text": "Cooles Gadget"},
+                ]
+    
+            preise = st.session_state["lotterie_preise"]
+    
+            # Für jede vorhandene Kachel Admin-Eingaben
+            for i, preis in enumerate(preise):
+                col1, col2 = st.columns([1, 3])
+                with col1:
+                    icon = st.text_input(f"Icon für Preis {i+1}", value=preis["icon"], key=f"icon_{i}")
+                with col2:
+                    text = st.text_input(f"Text für Preis {i+1}", value=preis.get("text", ""), key=f"text_{i}")
+                preise[i]["icon"] = icon
+                preise[i]["text"] = text
+    
+            # Möglichkeit, weitere Preise hinzuzufügen
+            if st.button("➕ Preis hinzufügen"):
+                preise.append({"icon": "🎁", "text": "Neuer Preis"})
+    
+            # Möglichkeit, Preise zu löschen
+            for i in reversed(range(len(preise))):
+                if st.button(f"🗑 Preis {i+1} löschen"):
+                    preise.pop(i)
+                    break
+    
+            st.session_state["lotterie_preise"] = preise
+    
+            # Änderungen speichern
+            if st.button("💾 Änderungen speichern"):
+                st.session_state["WOCHENNUMMER"] = neue_woche
+                st.session_state["WOCHENZIEL"] = ziel
+                st.session_state["BATTERIE_SCHWELLE"] = batterie
+                st.session_state["admin_info_text"] = info_text
+                st.session_state["CHALLENGE_START_DATETIME"] = datetime.combine(startdt, starttime)
+                st.session_state["CHALLENGE_END_DATETIME"] = datetime.combine(enddt, endtime)
+                st.session_state["TEAMZIEL_WOCHEN_ERREICHT"] = teamziel_wochen
+                st.session_state["lotterie_preise"] = preise
+                st.session_state["active_users_this_week"] = selected_users
+                st.session_state["RANKING_MODE"] = selected_mode
+            
+                save_settings({
+                    "WOCHENNUMMER": st.session_state["WOCHENNUMMER"],
+                    "WOCHENZIEL": st.session_state["WOCHENZIEL"],
+                    "BATTERIE_SCHWELLE": st.session_state["BATTERIE_SCHWELLE"],
+                    "CHALLENGE_START_DATETIME": st.session_state["CHALLENGE_START_DATETIME"].isoformat(),
+                    "CHALLENGE_END_DATETIME": st.session_state["CHALLENGE_END_DATETIME"].isoformat(),
+                    "TEAMZIEL_WOCHEN_ERREICHT": st.session_state["TEAMZIEL_WOCHEN_ERREICHT"],
+                    "admin_info_text": st.session_state["admin_info_text"],
+                    "lotterie_preise": st.session_state["lotterie_preise"],
+                    "active_users_this_week": st.session_state["active_users_this_week"],
+                    "RANKING_MODE": st.session_state["RANKING_MODE"]
+                })
+            
+                st.success("✅ Einstellungen gespeichert.")
+                st.rerun()
+            st.markdown("### 🧹 Wartung Beweisbilder")
+
+            with st.expander("⚠️ Alte Beweisbilder löschen (Admin)", expanded=False):
+                st.warning(
+                    "Dieser Vorgang löscht **ALLE Beweisbilder**, "
+                    "die **älter als 24 Stunden** sind – "
+                    "für **alle Nutzer und alle Läufe**.\n\n"
+                    "👉 Laufdaten bleiben vollständig erhalten."
+                )
+            
+                if st.checkbox("Ja, ich möchte fortfahren"):
+                    if st.button("🗑 Alle Beweisbilder > 24h löschen"):
+                        deleted = delete_all_old_proof_images(hours=1)
+            
+                        # Meldung für nächste Seite speichern
+                        if deleted == 0:
+                            st.session_state["delete_msg"] = "ℹ️ Keine löschbaren Beweisbilder gefunden."
+                        else:
+                            st.session_state["delete_msg"] = f"🗑 {deleted} Beweisbilder wurden gelöscht."
+            
+                        st.rerun()
+            
+            # 🟦 Meldung nach Rerun anzeigen
+            if "delete_msg" in st.session_state:
+                st.info(st.session_state["delete_msg"])
+                del st.session_state["delete_msg"]
+
+
+                
+
+            def download_file_button(file_path, button_text=None):
+                """Erstellt einen Download-Button für eine lokale Datei"""
+                import os
+                if not os.path.exists(file_path):
+                    st.warning(f"Datei {file_path} existiert nicht.")
+                    return
+            
+                with open(file_path, "rb") as f:
+                    file_bytes = f.read()
+                
+                button_text = button_text or f"Download {file_path}"
+                
+                st.download_button(
+                    label=button_text,
+                    data=file_bytes,
+                    file_name=file_path,
+                    mime="application/json"
+                )
+            
+            
+            # Beispiel im Admin-Bereich
+            st.markdown("### Backup der Daten")
+            download_file_button("settings.json", "⬇️ Einstellungen herunterladen")
+            download_file_button("data/runs_by_user.json", "⬇️ Läufe herunterladen")
+            download_file_button("data/users.json", "⬇️ user herunterladen")
+
+        
+
+
+    
+        # -------------------------------------------------
+        # TAB 2: LÄUFE & BEWEISBILDER
+        # -------------------------------------------------
+        with tab_runs:
+            show_admin_runs_overview()
+
+    
+    admin_module()
  
+def show():
+    
+    import streamlit as st
+    import pandas as pd
+    from datetime import datetime, timedelta, time
+    import html
+    import streamlit.components.v1 as components
+    import textwrap
+    from streamlit_autorefresh import st_autorefresh 
+    import time as time_sleep
+    import json
+    import os
+    import re
+    
+        
+    page = st.session_state.get("page", "dashboard")
+    
+    if page == "dashboard":
+        show_dashboard()
+
+    elif page == "admin":
+        show_admin_page()

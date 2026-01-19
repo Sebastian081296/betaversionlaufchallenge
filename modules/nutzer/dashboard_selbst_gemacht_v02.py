@@ -24,6 +24,8 @@ def show_dashboard():
     import os
     import re
     
+
+    
     
     # Session-State für einmaligen Hinweis
 
@@ -60,21 +62,21 @@ def show_dashboard():
     #     st_autorefresh(interval=1000, limit=8, key="mobile_notice_refresh")  # refresh bis max. 8x
     
     # Session-State für mobile Hinweis initialisieren
-    if "mobile_notice_start" not in st.session_state:
-        st.session_state["mobile_notice_start"] = datetime.now()
+    # if "mobile_notice_start" not in st.session_state:
+    #     st.session_state["mobile_notice_start"] = datetime.now()
     
-    # 7 Sekunden Dauer definieren
-    notice_duration = timedelta(seconds=7)
+    # # 7 Sekunden Dauer definieren
+    # notice_duration = timedelta(seconds=7)
     
-    # Nachricht anzeigen, wenn Zeit noch nicht abgelaufen
-    if datetime.now() - st.session_state["mobile_notice_start"] < notice_duration:
-        st.markdown('<div class="mobile-only">', unsafe_allow_html=True)
-        st.warning("⚠️ Bei Smartphone-Nutzung kann es hilfreich sein den Bildschirm für eine bessere Darstellung zu drehen.")
-        st.markdown('</div>', unsafe_allow_html=True)
+    # # Nachricht anzeigen, wenn Zeit noch nicht abgelaufen
+    # if datetime.now() - st.session_state["mobile_notice_start"] < notice_duration:
+    #     st.markdown('<div class="mobile-only">', unsafe_allow_html=True)
+    #     st.warning("⚠️ Bei Smartphone-Nutzung kann es hilfreich sein den Bildschirm für eine bessere Darstellung zu drehen.")
+    #     st.markdown('</div>', unsafe_allow_html=True)
     
-        # Autorefresh alle 1 Sekunde, damit die Nachricht verschwindet
-        from streamlit_autorefresh import st_autorefresh
-        st_autorefresh(interval=1000, limit=8, key="mobile_notice_refresh")
+    #     # Autorefresh alle 1 Sekunde, damit die Nachricht verschwindet
+    #     from streamlit_autorefresh import st_autorefresh
+    #     st_autorefresh(interval=1000, limit=8, key="mobile_notice_refresh")
 
 
 
@@ -127,30 +129,77 @@ def show_dashboard():
         return name
 
     def load_runs():
+        from zoneinfo import ZoneInfo
         if not os.path.exists(RUNS_FILE):
             return {}
     
+        tz = ZoneInfo("Europe/Berlin")  # deine Zeitzone
+    
         try:
             with open(RUNS_FILE, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if not content:
-                    return {}
-                raw = json.loads(content)
-                if isinstance(raw, dict):
-                    # Konvertiere ggf. Strings zu datetime, falls du das brauchst
-                    for user, runs in raw.items():
-                        for run in runs:
-                            if "time" in run and isinstance(run["time"], str):
-                                from datetime import datetime
-                                run["time"] = datetime.fromisoformat(run["time"])
-                    return raw
-                else:
-                    return {}
-        except json.JSONDecodeError:
-            return {}
+                raw = json.load(f)
+                for user, runs in raw.items():
+                    for run in runs:
+                        if "time" in run and isinstance(run["time"], str):
+                            dt = datetime.fromisoformat(run["time"])
+                            # 🔹 falls naive, tzinfo setzen
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=tz)
+                            run["time"] = dt
+                return raw
         except Exception as e:
             st.error(f"Ladefehler für Läufe: {e}")
             return {}
+
+
+    def extract_exif_metadata(image_bytes):
+        from PIL import Image
+        from PIL.ExifTags import TAGS, GPSTAGS
+        from io import BytesIO
+        from datetime import datetime
+        try:
+            img = Image.open(BytesIO(image_bytes))
+            exif_raw = img._getexif()
+            if not exif_raw:
+                return {}
+    
+            exif = {TAGS.get(k, k): v for k, v in exif_raw.items()}
+    
+            result = {}
+    
+            # 📅 Aufnahmezeit
+            dt_original = exif.get("DateTimeOriginal")
+            if dt_original:
+                result["taken_at"] = datetime.strptime(dt_original, "%Y:%m:%d %H:%M:%S").isoformat()
+    
+            # 📍 GPS
+            gps_info = exif.get("GPSInfo")
+            if gps_info:
+                gps_data = {}
+                for key in gps_info:
+                    decoded = GPSTAGS.get(key, key)
+                    gps_data[decoded] = gps_info[key]
+    
+                def convert(coord):
+                    d, m, s = coord
+                    return float(d) + float(m)/60 + float(s)/3600
+    
+                lat = convert(gps_data["GPSLatitude"])
+                if gps_data.get("GPSLatitudeRef") == "S":
+                    lat = -lat
+    
+                lon = convert(gps_data["GPSLongitude"])
+                if gps_data.get("GPSLongitudeRef") == "W":
+                    lon = -lon
+    
+                result["gps"] = {"lat": lat, "lon": lon}
+    
+            return result
+    
+        except Exception:
+            return {}
+
+
 
     
         def parse_time(t):
@@ -237,6 +286,8 @@ def show_dashboard():
         {"icon": "🎁", "text": "Café-Gutschein"},
         {"icon": "🎁", "text": "Cooles Gadget"},
     ])
+    st.session_state["RANKING_MODE"] = stored.get("RANKING_MODE","distance_then_speed")
+    
     if "runs_expander_open" not in st.session_state:
         st.session_state["runs_expander_open"] = False
     
@@ -542,10 +593,60 @@ def show_dashboard():
     def escape_html(txt):
         return html.escape(str(txt))
     
+    def get_previous_week_distance_by_user(runs_by_user, all_users, current_week_number):
+        """
+        Liefert dict: {norm_user: distanz_vorwoche_in_meter}
+        """
+        from zoneinfo import ZoneInfo
+        from datetime import datetime
+    
+        tz = ZoneInfo("Europe/Berlin")
+    
+        # Vorwoche bestimmen
+        if current_week_number <= 1:
+            return {normalize_name(u): 0 for u in all_users}
+    
+        dt_start_prev, dt_end_prev = get_challenge_week_start_end(current_week_number - 1)
+    
+        prev_week_dist = {}
+    
+        for username in all_users:
+            norm_user = normalize_name(username)
+            runs = runs_by_user.get(norm_user, [])
+    
+            week_runs = filter_runs_for_week(runs, dt_start_prev, dt_end_prev)
+    
+            total_dist = sum(
+                r.get("dist", 0)
+                for r in week_runs
+                if isinstance(r.get("dist"), (int, float))
+            )
+    
+            prev_week_dist[norm_user] = total_dist
+    
+        return prev_week_dist
+
+    
+    def calc_weighted_distance(current_dist, prev_week_dist):
+        """
+        Distanz bis Vorwochenleistung normal,
+        darüber hinaus doppelt
+        """
+        if prev_week_dist <= 0:
+            # alles zählt doppelt, wenn es keine Vorwoche gibt
+            return current_dist * 2
+    
+        if current_dist <= prev_week_dist:
+            return current_dist
+    
+        excess = current_dist - prev_week_dist
+        return prev_week_dist + excess * 2
+
+    
     
     def platz_lotterie_prozent(platz, wochenziel_erreicht):
-        if not wochenziel_erreicht:
-            return 0.0
+        #if not wochenziel_erreicht:
+            #return 0.0
         if 1 <= platz <= 9:
             table = {
                 1: 25.0,
@@ -568,32 +669,58 @@ def show_dashboard():
         return st.session_state.get("CHALLENGE_END_DATETIME")
     
     def get_challenge_start_end():
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Europe/Berlin")
         start = st.session_state.get("CHALLENGE_START_DATETIME")
         end = st.session_state.get("CHALLENGE_END_DATETIME")
+    
         if not start:
-            # Fallback: Montag dieser Woche
-            now = datetime.now()
+            now = datetime.now(tz)
             start = now - timedelta(days=now.weekday())
+            start = start.replace(hour=0, minute=0, second=0, microsecond=0)
         if not end:
             end = start + timedelta(days=6, hours=23, minutes=59, seconds=59)
+        
+        # Alles tz-aware
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=tz)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=tz)
+    
         return start, end
 
     
     from datetime import datetime
 
+
+
     def parse_datetime(t):
-        """Versucht, einen Laufzeit-String oder datetime-Objekt korrekt zu parsen."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        """Versucht, einen Laufzeit-String oder datetime-Objekt korrekt zu parsen und tz-aware zu machen."""
+        tz = ZoneInfo("Europe/Berlin")
+        
         if isinstance(t, datetime):
-            return t
-        if isinstance(t, str):
+            dt = t
+        elif isinstance(t, str):
             try:
-                return datetime.fromisoformat(t)
+                dt = datetime.fromisoformat(t)
             except ValueError:
-                # Fallback: Mikrosekunden abschneiden
                 if "." in t:
                     t = t.split(".")[0]
-                    return datetime.fromisoformat(t)
-        return None
+                    dt = datetime.fromisoformat(t)
+                else:
+                    return None
+        else:
+            return None
+    
+        # Alles tz-aware
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=tz)
+    
+        return dt
+
     
     def filter_runs_for_week(läufe, dt_start, dt_ende):
         result = []
@@ -607,25 +734,34 @@ def show_dashboard():
     
     from datetime import timedelta
 
+
+
     def get_challenge_week_start_end(week_number=None):
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Europe/Berlin")
+        
+        # Challenge Start & End aus Session oder Standard
         start = st.session_state.get("CHALLENGE_START_DATETIME")
         end = st.session_state.get("CHALLENGE_END_DATETIME")
         
         if start is None:
-            # Default: Montag dieser Woche
-            now = datetime.now()
+            now = datetime.now(tz)
             start = now - timedelta(days=now.weekday())
+            start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif start.tzinfo is None:
+            start = start.replace(tzinfo=tz)
         
+        # Woche verschieben
         if week_number is not None and week_number > 1:
             start += timedelta(weeks=week_number - 1)
         
-        if end is None:
-            end = start + timedelta(days=6, hours=23, minutes=59, seconds=59)
-        else:
-            # Optional: Ende auf 23:59:59 Uhr setzen
-            end = datetime.combine(end.date(), datetime.max.time())
+        # Ende der Woche berechnen (immer 6 Tage, 23:59:59)
+        end = start + timedelta(days=6, hours=23, minutes=59, seconds=59)
         
         return start, end
+
+
 
     
     def show_week_tile():
@@ -782,9 +918,13 @@ def show_dashboard():
     
     
     
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    
     def calc_overall_progress(all_users, runs_by_user, wochenziel_m, dt_start=None, dt_end=None):
-        dt_start = dt_start or datetime.now()
-        dt_end = dt_end or datetime.now()
+        tz = ZoneInfo("Europe/Berlin")
+        dt_start = dt_start or datetime.now(tz)
+        dt_end = dt_end or datetime.now(tz)
         
         n_gesamt = len(all_users)
         n_done = 0
@@ -799,6 +939,7 @@ def show_dashboard():
     
         pct = (n_done / n_gesamt * 100.0) if n_gesamt > 0 else 0.0
         return pct, n_done, n_gesamt
+
 
 
 
@@ -820,7 +961,11 @@ def show_dashboard():
         import textwrap
         import streamlit as st
         import streamlit.components.v1 as components
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
     
+        tz = ZoneInfo("Europe/Berlin")
+        
         COMMON_TILE_HEIGHT = st.session_state.get("COMMON_TILE_HEIGHT", 180)
         COMMON_BAR_HEIGHT = st.session_state.get("COMMON_BAR_HEIGHT", 20)
         COMMON_BAR_BORDER = st.session_state.get("COMMON_BAR_BORDER", "2px")
@@ -850,8 +995,15 @@ def show_dashboard():
         else:
             fill_class = "fill-gruen"
             
-        start_datetime = st.session_state.get("CHALLENGE_START_DATETIME", datetime.now())
-        now = datetime.now()
+        start_datetime = st.session_state.get("CHALLENGE_START_DATETIME", None)
+
+        if start_datetime is None:
+            start_datetime = datetime.now(tz)
+        else:
+            # Falls start_datetime naive ist, auf aware konvertieren
+            if start_datetime.tzinfo is None:
+                start_datetime = start_datetime.replace(tzinfo=tz)
+        now = datetime.now(tz)
     
         if now < start_datetime:
             
@@ -1074,7 +1226,7 @@ def show_dashboard():
             ziel_text = "Beitrag Teamziel ✔" if ziel_ok else "Beitrag Teamziel ✖"
             koch_text = "Koch 🍽️" if unter_den_koechen else "Kein Koch"
         
-            lotto_text = f"{lotto_pct:.0f}%" if ziel_ok else "0%"
+            lotto_text = f"{lotto_pct:.1f}%" if ziel_ok else "0.0%"
         
             # --- Optionaler Motivationshinweis ---
             motivation = ""
@@ -1149,6 +1301,11 @@ def show_dashboard():
         import textwrap
         import streamlit as st
         import streamlit.components.v1 as components
+        
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+    
+        tz = ZoneInfo("Europe/Berlin")
     
         rows = st.session_state.get("rangliste_rows", [])
         if not rows:
@@ -1175,8 +1332,15 @@ def show_dashboard():
             podium_html += textwrap.dedent(f"""
                 <div class="podium-row"><strong>{platz_text}</strong>: {name}</div>
             """)
-        start_datetime = st.session_state.get("CHALLENGE_START_DATETIME", datetime.now())
-        now = datetime.now()
+        start_datetime = st.session_state.get("CHALLENGE_START_DATETIME", None)
+        
+        if start_datetime is None:
+            start_datetime = datetime.now(tz)
+        else:
+            # Falls start_datetime naive ist, auf aware konvertieren
+            if start_datetime.tzinfo is None:
+                start_datetime = start_datetime.replace(tzinfo=tz)
+        now = datetime.now(tz)
         # --- Motivation (identisches Pattern wie show_rank_tile) ---
         motivation = ""
         if now < start_datetime:
@@ -1238,6 +1402,11 @@ def show_dashboard():
         import textwrap
         import streamlit as st
         import streamlit.components.v1 as components
+        
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+    
+        tz = ZoneInfo("Europe/Berlin")
     
         rows = st.session_state.get("rangliste_rows", [])
         if not rows:
@@ -1259,8 +1428,15 @@ def show_dashboard():
     
         # --- Motivation (analog zu den anderen Tiles) ---
         motivation = ""
-        start_datetime = st.session_state.get("CHALLENGE_START_DATETIME", datetime.now())
-        now = datetime.now()
+        start_datetime = st.session_state.get("CHALLENGE_START_DATETIME", None)
+
+        if start_datetime is None:
+            start_datetime = datetime.now(tz)
+        else:
+            # Falls start_datetime naive ist, auf aware konvertieren
+            if start_datetime.tzinfo is None:
+                start_datetime = start_datetime.replace(tzinfo=tz)
+        now = datetime.now(tz)
         # --- Motivation (identisches Pattern wie show_rank_tile) ---
         motivation = ""
         if now < start_datetime:
@@ -1336,13 +1512,17 @@ def show_dashboard():
         import textwrap
         import streamlit as st
         import streamlit.components.v1 as components
+        
         from datetime import datetime
+        from zoneinfo import ZoneInfo
+    
+        tz = ZoneInfo("Europe/Berlin")
     
         COMMON_TILE_HEIGHT = 180
-        end_datetime = st.session_state.get("CHALLENGE_END_DATETIME", datetime.now())
-        start_datetime = st.session_state.get("CHALLENGE_START_DATETIME", datetime.now())
-        end_ts = int(end_datetime.timestamp() * 1000)
-        start_ts = int(start_datetime.timestamp() * 1000)
+        end_datetime = st.session_state.get("CHALLENGE_END_DATETIME", datetime.now(tz))
+        start_datetime = st.session_state.get("CHALLENGE_START_DATETIME", datetime.now(tz))
+        end_ts = int((end_datetime - timedelta(hours=1)).astimezone(tz).timestamp() * 1000)
+        start_ts = int(start_datetime.astimezone(tz).timestamp() * 1000)
     
         html_code = textwrap.dedent(f"""
         <style>
@@ -1459,7 +1639,24 @@ def show_dashboard():
         st.session_state["show_my_runs"] = not st.session_state.get("show_my_runs", False)
         st.session_state["show_run_form"] = False
         st.session_state["runs_expander_open"] = True
-
+        
+    def get_best_avg_speed_kmh(runs):
+        """
+        Ermittelt die höchste Durchschnittsgeschwindigkeit (km/h)
+        aus einer Liste von Läufen.
+        """
+        best_speed = None
+    
+        for r in runs:
+            dist = r.get("dist", 0)        # Meter
+            dur = r.get("duration", 0)     # Sekunden
+    
+            if dist > 0 and dur > 0:
+                speed = (dist / 1000) / (dur / 3600)  # km/h
+                if best_speed is None or speed > best_speed:
+                    best_speed = speed
+    
+        return best_speed
 
 
 
@@ -1467,27 +1664,118 @@ def show_dashboard():
     def save_runs(runs_by_user):
         import os
         import json
+        from datetime import datetime
     
-        # Ordner sicherstellen
         os.makedirs(os.path.dirname(RUNS_FILE), exist_ok=True)
     
         serializable = {}
+    
         for user, runs in runs_by_user.items():
             serializable[user] = []
+    
             for r in runs:
-                r_copy = r.copy()
-                r_copy["time"] = r_copy["time"].isoformat()
+                r_copy = {}
+    
+                for key, value in r.items():
+                    if key == "time" and isinstance(value, datetime):
+                        r_copy[key] = value.isoformat()
+    
+                    elif key == "proof_image" and isinstance(value, dict):
+                        proof_copy = value.copy()
+    
+                        uploaded_at = proof_copy.get("uploaded_at")
+                        if isinstance(uploaded_at, datetime):
+                            proof_copy["uploaded_at"] = uploaded_at.isoformat()
+    
+                        r_copy["proof_image"] = proof_copy
+    
+                    else:
+                        r_copy[key] = value
+    
                 serializable[user].append(r_copy)
     
         with open(RUNS_FILE, "w", encoding="utf-8") as f:
             json.dump(serializable, f, indent=2, ensure_ascii=False)
+            
+
+
+
+    def send_new_run_mail(run, user_display):
+        SMTP_HOST = "posteo.de"
+        SMTP_PORT = 465
+        SMTP_USER = "laufchallengetsvgerabronn@posteo.de"
+        SMTP_PASSWORD = "Laufchallenge123+"
+
+        SMTP_FROM = "Laufchallenge <laufchallengetsvgerabronn@posteo.de>"
+        ADMIN_MAILS = ["sebastian.schuch.gerabronn@gmail.com","tob.pelzer@web.de"]
+        import smtplib
+        from email.message import EmailMessage
+        import base64
+        import json
+        """
+        run = einzelner Lauf (dict)
+        user_display = Anzeigename des Nutzers
+        """
+    
+        msg = EmailMessage()
+        msg["Subject"] = "🏃 Neuer Lauf eingereicht"
+        msg["From"] = SMTP_FROM
+        msg["To"] = ", ".join(ADMIN_MAILS)  # Liste oder String
+    
+        dist_km = run["dist"] / 1000
+        duration_min = run["duration"] // 60
+        duration_sec = run["duration"] % 60
+    
+        body = f"""
+    Neuer Lauf wurde eingereicht:
+    
+    👤 Nutzer: {user_display}
+    📏 Distanz: {dist_km:.2f} km
+    ⏱ Dauer: {duration_min}:{duration_sec:02d} min
+    🕒 Zeitpunkt: {run["time"]}
+    
+    📝 Kommentar:
+    {run.get("comment", "-")}
+    
+    📸 Bildinformationen:
+    Dateiname: {run["proof_image"]["name"]}
+    Typ: {run["proof_image"]["type"]}
+    
+    🧾 EXIF-Metadaten:
+    {json.dumps(run["proof_image"].get("exif", {}), indent=2, ensure_ascii=False)}
+        """
+    
+        msg.set_content(body)
+    
+        # --- Bild anhängen ---
+        image_b64 = run["proof_image"]["data"]
+        image_bytes = base64.b64decode(image_b64)
+    
+        msg.add_attachment(
+            image_bytes,
+            maintype="image",
+            subtype=run["proof_image"]["type"].split("/")[-1],
+            filename=run["proof_image"]["name"]
+        )
+    
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as server:
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
+
+
 
               
     def add_run_entry():
+
         import base64
         from datetime import datetime
         
-        challenge_start = st.session_state.get("CHALLENGE_START_DATETIME", datetime.now())
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        
+        tz = ZoneInfo("Europe/Berlin")
+        
+        challenge_start = st.session_state.get("CHALLENGE_START_DATETIME", datetime.now(tz))
         challenge_started = challenge_start and datetime.now() >= challenge_start
     
         user = st.session_state.get("user")
@@ -1589,12 +1877,16 @@ def show_dashboard():
                     st.error("Bitte lade ein Beweisbild hoch.")
                     return
     
-                image_b64 = base64.b64encode(proof_image.read()).decode("utf-8")
-    
+                image_bytes = proof_image.read()
+                image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+                
+                exif_data = extract_exif_metadata(image_bytes)
+                
+
                 runs_by_user = load_runs()
                 norm_user = normalize_name(user)
                 runs_by_user.setdefault(norm_user, [])
-    
+                from datetime import timezone
                 runs_by_user[norm_user].append({
                     "dist": dist_m,
                     "duration": total_seconds,
@@ -1603,7 +1895,9 @@ def show_dashboard():
                     "proof_image": {
                         "name": proof_image.name,
                         "type": proof_image.type,
-                        "data": image_b64
+                        "data": image_b64,
+                        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+                        "exif": exif_data
                     },
                     "admin_confirmed": False,  # neu
                     "editable": True           # neu
@@ -1612,7 +1906,16 @@ def show_dashboard():
     
                 st.session_state["runs_by_user"] = runs_by_user
                 save_runs(runs_by_user)
-    
+                
+                try:
+                    send_new_run_mail(
+                        run=runs_by_user[norm_user][-1],
+                        user_display=user
+                    )
+                except Exception as e:
+                    pass
+                    
+                    
                 st.success(f"✅ Lauf gespeichert: {dist_km:.2f} km in {minutes}:{seconds:02d} min")
                 import time as time_sleep
                 time_sleep.sleep(1)
@@ -1628,6 +1931,7 @@ def show_dashboard():
     def edit_run_form(user, run_index, run, admin=False):
         import base64
         from datetime import datetime
+        
     
         with st.form(f"edit_form_{user}_{run_index}"):
             dist_km = st.number_input(
@@ -1669,15 +1973,26 @@ def show_dashboard():
                 run_entry["dist"] = dist_m
                 run_entry["duration"] = total_seconds
                 run_entry["comment"] = comment.strip() if comment else ""
-                run_entry["time"] = datetime.now()
+                from zoneinfo import ZoneInfo
+                run_entry["time"] = datetime.now(ZoneInfo("Europe/Berlin"))
+    
         
                 if proof_image is not None:
-                    image_b64 = base64.b64encode(proof_image.read()).decode("utf-8")
+                    from datetime import timezone
+
+                    image_bytes = proof_image.read()
+                    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+                    
+                    exif_data = extract_exif_metadata(image_bytes)
+                    
                     run_entry["proof_image"] = {
                         "name": proof_image.name,
                         "type": proof_image.type,
-                        "data": image_b64
+                        "data": image_b64,
+                        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+                        "exif": exif_data
                     }
+
         
                 if not admin:
                     run_entry["editable"] = True
@@ -1694,6 +2009,10 @@ def show_dashboard():
     def show_user_runs_overview():
         import base64
         from datetime import datetime as dt
+    
+        from zoneinfo import ZoneInfo
+        
+        tz = ZoneInfo("Europe/Berlin")
         
     
         user = st.session_state.get("user")
@@ -1710,8 +2029,15 @@ def show_dashboard():
         norm_user = normalize_name(user)
         user_runs = runs_by_user.get(norm_user, [])
         
-        start_datetime = st.session_state.get("CHALLENGE_START_DATETIME", dt.now())
-        now = dt.now()
+        start_datetime = st.session_state.get("CHALLENGE_START_DATETIME", None)
+
+        if start_datetime is None:
+            start_datetime = datetime.now(tz)
+        else:
+            # Falls start_datetime naive ist, auf aware konvertieren
+            if start_datetime.tzinfo is None:
+                start_datetime = start_datetime.replace(tzinfo=tz)
+        now = dt.now(tz)
         
         if start_datetime>now:
             st.markdown(
@@ -1893,92 +2219,217 @@ def show_dashboard():
                     )
                 index += 1
         st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
-
-
-
-
-
-
-
-
-
-
-
-
-
+        
+    def run_points_variant_linear(dist_m, avg_speed_kmh):
+        """
+        dist_m: Distanz des Laufs in Metern
+        avg_speed_kmh: Durchschnittsgeschwindigkeit des Laufs
+        """
+        if not dist_m or not avg_speed_kmh or avg_speed_kmh <= 0:
+            return 0
+    
+        km = dist_m / 1000
+    
+        # Mindest- / Maximaldistanz
+        if km < 2:
+            return 0
+    
+        anrechenbare_km = min(km, 6)
+    
+        return anrechenbare_km * (avg_speed_kmh)
 
 
     def show_weekly_ranking_dashboard():
-        from datetime import datetime
         import streamlit as st
         import pandas as pd
         import numpy as np
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
     
+        tz = ZoneInfo("Europe/Berlin")
+    
+        # ----------------- Session State -----------------
         runs_by_user = st.session_state.get("runs_by_user", {})
         all_users = st.session_state.get("active_users_this_week", [])
         wochenziel = st.session_state.get("WOCHENZIEL", 5000)
+        ranking_mode = st.session_state.get("RANKING_MODE", "distance_then_speed")
+        aktuelle_woche = st.session_state.get("WOCHENNUMMER", 1)
     
-        dt_start, dt_end = get_challenge_start_end()
+        dt_start, dt_end = get_challenge_week_start_end(aktuelle_woche)
+        dt_prev_start, dt_prev_end = get_challenge_week_start_end(
+            aktuelle_woche - 1 if aktuelle_woche > 1 else 1
+        )
+    
         rows = []
     
-        # ---------- Daten aufbereiten ----------
+        # ----------------- Daten aufbereiten -----------------
         for username in all_users:
             norm_user = normalize_name(username)
             runs = runs_by_user.get(norm_user, [])
     
-            week_runs = []
-            for r in runs:
-                t = r.get("time")
-                if isinstance(t, str):
-                    try:
-                        t = datetime.fromisoformat(t)
-                    except Exception:
-                        continue
-                if isinstance(t, datetime) and dt_start <= t <= dt_end:
-                    week_runs.append(r)
+            week_runs = filter_runs_for_week(runs, dt_start, dt_end)
     
-            total_dist = sum(
-                r.get("dist", 0)
-                for r in week_runs
-                if isinstance(r.get("dist"), (int, float))
-            )
+            total_dist = 0
+            speed_points = 0
+            speed_km_total = 0
+            speed_weighted_sum = 0
     
-            best_speed = None
             for r in week_runs:
-                dist = r.get("dist", 0)
-                dur = r.get("duration", 0)
-                if dist > 0 and dur > 0:
-                    speed = (dist / 1000) / (dur / 3600)
-                    if best_speed is None or speed > best_speed:
-                        best_speed = speed
+                dist = r.get("dist", 0)          # Meter
+                dur = r.get("duration", 0)       # Sekunden
     
+                # Geschwindigkeit berechnen, falls avg_speed_kmh fehlt
+                speed_raw = r.get("avg_speed_kmh") or r.get("speed")
+                try:
+                    speed = float(speed_raw)
+                except (TypeError, ValueError):
+                    speed = None
+    
+                if dist > 0 and dur > 0 and speed is None:
+                    speed = (dist / 1000) / (dur / 3600)  # km/h
+    
+                if isinstance(dist, (int, float)):
+                    total_dist += dist
+    
+                # NUR im speed_points-Modus
+                if ranking_mode == "speed_points":
+                    if isinstance(dist, (int, float)) and isinstance(speed, (int, float)) and dist >= 2000 and speed > 0:
+                        km = min(dist / 1000, 6)  # max 6 km pro Lauf
+                        speed_points += run_points_variant_linear(dist, speed)
+                        speed_km_total += km
+                        speed_weighted_sum += km * speed
+    
+            # Durchschnittsgeschwindigkeit für angerechnete km
+            avg_speed_for_points = (speed_weighted_sum / speed_km_total) if speed_km_total > 0 else 0
+    
+            best_speed = get_best_avg_speed_kmh(week_runs) or 0
             ziel_ok = total_dist >= wochenziel
     
+            prev_week_runs = filter_runs_for_week(runs, dt_prev_start, dt_prev_end)
+            prev_total_dist_tmp = sum(
+                r.get("dist", 0)
+                for r in prev_week_runs
+                if isinstance(r.get("dist"), (int, float))
+            )
+            prev_total_dist = max(prev_total_dist_tmp, 6000)
+    
             rows.append({
-                "Platz": 0,  # wird später gesetzt
+                "Platz": 0,
                 "Name": username,
-                "Distanz (km)": total_dist / 1000 if total_dist else np.nan,
-                "Top-Speed (km/h)": best_speed if best_speed is not None else np.nan,
+    
+                # Anzeige
+                "Distanz (km)": total_dist / 1000,
+                "Distanz Vorwoche (km)": prev_total_dist / 1000,
+                "Punkte": speed_points if ranking_mode == "speed_points" else None,
+                "km angerechnet": speed_km_total if ranking_mode == "speed_points" else None,
+                "Avg-Speed km/h": avg_speed_for_points if ranking_mode == "speed_points" else None,
+                "Top-Speed (km/h)": best_speed,
                 "Wochenziel": "Ja" if ziel_ok else "Nein",
-                "Lotterie (%)": 0,  # wird später berechnet
-                "Ziel_bool": ziel_ok  # für Styling falls gewünscht
+                "Lotterie (%)": 0,
+    
+                # interne Felder
+                "_dist_raw": total_dist,
+                "_best_speed": best_speed,
+                "_speed_points": speed_points,
+                "_speed_km_total": speed_km_total,
+                "_avg_speed_for_points": avg_speed_for_points,
+                "_weighted_dist": None,
+                "_prev_dist_raw": prev_total_dist,
+                "Ziel_bool": ziel_ok
             })
     
-        # ---------- Sortieren & Platz ----------
-        #rows.sort(key=lambda x: x["Distanz (km)"] if not pd.isna(x["Distanz (km)"]) else 0, reverse=True)
-        rows.sort(key=lambda x: (x["Distanz (km)"] if not pd.isna(x["Distanz (km)"]) else 0, x["Top-Speed (km/h)"] if not pd.isna(x["Top-Speed (km/h)"]) else 0),reverse=True)
+        # ----------------- Gewichtete Distanz (unverändert) -----------------
+        if ranking_mode == "weighted_distance":
+            for r in rows:
+                prev = r["_prev_dist_raw"]
+                curr = r["_dist_raw"]
+    
+                if prev <= 0:
+                    r["_weighted_dist"] = curr * 2
+                elif curr <= prev:
+                    r["_weighted_dist"] = curr
+                else:
+                    r["_weighted_dist"] = prev + (curr - prev) * 2
+    
+        # ----------------- Sortierung -----------------
+        if ranking_mode == "distance_only":
+            rows.sort(key=lambda x: x["_dist_raw"], reverse=True)
+        elif ranking_mode == "speed_only":
+            rows.sort(key=lambda x: x["_best_speed"], reverse=True)
+        elif ranking_mode == "distance_then_speed":
+            rows.sort(key=lambda x: (x["_dist_raw"], x["_best_speed"]), reverse=True)
+        elif ranking_mode == "weighted_distance":
+            rows.sort(key=lambda x: (x["_weighted_dist"], x["_best_speed"]), reverse=True)
+        elif ranking_mode == "speed_points":
+            rows.sort(key=lambda x: (x["_speed_points"],x["_best_speed"]), reverse=True)
+    
+        # ----------------- Platz & Lotterie -----------------
         for i, r in enumerate(rows, start=1):
             r["Platz"] = i
             r["Lotterie (%)"] = platz_lotterie_prozent(i, r["Ziel_bool"])
     
-        # ---------- DataFrame bauen ----------
+        # ----------------- DataFrame bauen -----------------
         df = pd.DataFrame(rows)
     
-        # NaN in "-" umwandeln und Zahlen formatieren
-        df["Top-Speed (km/h)"] = df["Top-Speed (km/h)"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
-        df["Distanz (km)"] = df["Distanz (km)"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
-        df["Lotterie (%)"] = df["Lotterie (%)"].apply(lambda x: f"{x:.1f}" if x > 0 else "-")
-        df=df.drop(columns=["Ziel_bool"])
+        # Bonus-Spalte nur im weighted-Modus
+        if ranking_mode == "weighted_distance":
+            df.insert(
+                df.columns.get_loc("Distanz (km)") + 2,
+                "Distanz inkl. Bonus (km)",
+                df["_weighted_dist"].fillna(0) / 1000
+            )
+    
+        
+        # Vorwoche nur im weighted-Modus anzeigen
+        if ranking_mode != "weighted_distance":
+            df = df.drop(columns=["Distanz Vorwoche (km)"], errors="ignore")
+        
+        # Speed-Punkte nur im speed_points-Modus anzeigen
+        if ranking_mode != "speed_points":
+            df = df.drop(columns=["Punkte", "km angerechnet", "Avg-Speed km/h"], errors="ignore")
+        else:
+            # Reihenfolge im speed_points-Modus anpassen: Speed-Punkte zuerst
+            cols = df.columns.tolist()
+            # gewünschte Reihenfolge: Platz, Name, Speed-Punkte, Speed-KM angerechnet, Avg-Speed, Distanz, ...
+            new_order = ["Platz", "Name", "Punkte", "km angerechnet", "Avg-Speed km/h","Top-Speed (km/h)","Distanz (km)","Wochenziel","Lotterie (%)"]
+            for c in cols:
+                if c not in new_order:
+                    new_order.append(c)
+            df = df[new_order]
+
+    
+        # ----------------- Formatierung -----------------
+        for col in ["Distanz (km)", "Distanz Vorwoche (km)", "Distanz inkl. Bonus (km)"]:
+            if col in df.columns:
+                df[col] = df[col].fillna(0).apply(lambda x: f"{x:.2f}")
+    
+        for col in ["Punkte", "km angerechnet", "Avg-Speed km/h"]:
+            if col in df.columns:
+                df[col] = df[col].fillna(0).apply(lambda x: f"{x:.2f}")
+    
+        df["Top-Speed (km/h)"] = df["Top-Speed (km/h)"].apply(
+            lambda x: f"{x:.1f}" if x > 0 else "0.0"
+        )
+        df["Lotterie (%)"] = df["Lotterie (%)"].apply(
+            lambda x: f"{x:.1f}" if x > 0 else "0.0"
+        )
+    
+        # interne Spalten entfernen
+        df = df.drop(
+            columns=[
+                "_dist_raw",
+                "_best_speed",
+                "_speed_points",
+                "_speed_km_total",
+                "_avg_speed_for_points",
+                "_weighted_dist",
+                "_prev_dist_raw",
+                "Ziel_bool"
+            ],
+            errors="ignore"
+        )
+    
+        # ----------------- Styling -----------------
         styled_df = (
             df.style
             .set_properties(**{
@@ -1994,7 +2445,8 @@ def show_dashboard():
                 ]}
             ])
         )
-        # ---------- Tabelle rendern ----------
+    
+        # ----------------- Render -----------------
         st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
 
@@ -2011,41 +2463,149 @@ def show_dashboard():
 
 
 
+
+
+
+    def sort_ranking_by_best_speed(rows):
+        return sorted(
+            rows,
+            key=lambda x: (
+                x.get("best_speed") if x.get("best_speed") is not None else 0,
+                x.get("dist", 0)
+            ),
+            reverse=True
+    )
+
+
+
+
     
 
 
-    # Vor dem Aufruf der Kacheln einmal die Rangliste berechnen
     def update_rangliste():
-        from datetime import datetime
+        import streamlit as st
+        from zoneinfo import ZoneInfo
+    
+        tz = ZoneInfo("Europe/Berlin")
+    
+        # ----------------- Session State -----------------
         runs_by_user = st.session_state.get("runs_by_user", {})
         all_users = st.session_state.get("active_users_this_week", [])
         wochenziel = st.session_state.get("WOCHENZIEL", 5000)
-        dt_start, dt_end = get_challenge_start_end()
+        ranking_mode = st.session_state.get("RANKING_MODE", "distance_then_speed")
+        aktuelle_woche = st.session_state.get("WOCHENNUMMER", 1)
+    
+        # Aktuelle & Vorwoche
+        dt_start, dt_end = get_challenge_week_start_end(aktuelle_woche)
+        dt_prev_start, dt_prev_end = get_challenge_week_start_end(
+            aktuelle_woche - 1 if aktuelle_woche > 1 else 1
+        )
     
         rows = []
+    
+        # ----------------- Daten sammeln -----------------
         for username in all_users:
             norm_user = normalize_name(username)
             runs = runs_by_user.get(norm_user, [])
-            week_runs = [r for r in runs if isinstance(r.get("time"), datetime) and dt_start <= r["time"] <= dt_end]
-            total_dist = sum(r.get("dist",0) for r in week_runs)
-            best_speed = None
-            for r in week_runs:
-                dist = r.get("dist", 0)
-                dur = r.get("duration", 0)
-                if dist > 0 and dur > 0:
-                    speed = (dist / 1000) / (dur / 3600)
-                    if best_speed is None or speed > best_speed:
-                        best_speed = speed
-            ziel_ok = total_dist >= wochenziel
-            rows.append({"name": username, "dist": total_dist, "best_speed": best_speed, "ziel": ziel_ok})
     
-
-        rows.sort(key=lambda x: (x.get("dist", 0), x.get("best_speed", 0)),reverse=True)
+            # Aktuelle Woche
+            week_runs = filter_runs_for_week(runs, dt_start, dt_end)
+    
+            total_dist = 0
+            speed_points = 0
+    
+            for r in week_runs:
+                dist = r.get("dist", 0)          # Meter
+                dur = r.get("duration", 0)       # Sekunden
+    
+                # Geschwindigkeit berechnen, falls avg_speed_kmh fehlt
+                speed_raw = r.get("avg_speed_kmh") or r.get("speed")
+                try:
+                    speed = float(speed_raw)
+                except (TypeError, ValueError):
+                    speed = None
+    
+                if dist > 0 and dur > 0 and speed is None:
+                    speed = (dist / 1000) / (dur / 3600)  # km/h
+    
+                if isinstance(dist, (int, float)):
+                    total_dist += dist
+    
+                # Speed-Punkte NUR im speed_points-Modus
+                if ranking_mode == "speed_points":
+                    if isinstance(dist, (int, float)) and isinstance(speed, (int, float)) and dist >= 2000 and speed > 0:
+                        speed_points += run_points_variant_linear(dist, speed)
+    
+            best_speed = get_best_avg_speed_kmh(week_runs) or 0
+            ziel_ok = total_dist >= wochenziel
+    
+            # Vorwoche
+            prev_week_runs = filter_runs_for_week(runs, dt_prev_start, dt_prev_end)
+            prev_total_dist_tmp = sum(
+                r.get("dist", 0)
+                for r in prev_week_runs
+                if isinstance(r.get("dist"), (int, float))
+            )
+            prev_total_dist = max(prev_total_dist_tmp, 6000)
+    
+            rows.append({
+                "name": username,
+    
+                # interne Werte
+                "_dist_raw": total_dist,
+                "_best_speed": best_speed,
+                "_speed_points": speed_points,
+                "_weighted_dist": None,
+                "_prev_dist_raw": prev_total_dist,
+                "ziel": ziel_ok,
+    
+                # öffentliche Werte
+                "dist": total_dist,
+                "best_speed_public": best_speed,
+                "speed_points_public": speed_points,
+                "prev_dist_public": prev_total_dist
+            })
+    
+        # ----------------- Gewichtete Distanz -----------------
+        if ranking_mode == "weighted_distance":
+            for r in rows:
+                curr = r["_dist_raw"]
+                prev = r["_prev_dist_raw"]
+    
+                if prev <= 0:
+                    r["_weighted_dist"] = curr * 2
+                elif curr <= prev:
+                    r["_weighted_dist"] = curr
+                else:
+                    r["_weighted_dist"] = prev + (curr - prev) * 2
+    
+        # ----------------- Sortierung -----------------
+        if ranking_mode == "distance_only":
+            rows.sort(key=lambda x: x["_dist_raw"], reverse=True)
+    
+        elif ranking_mode == "speed_only":
+            rows.sort(key=lambda x: x["_best_speed"], reverse=True)
+    
+        elif ranking_mode == "distance_then_speed":
+            rows.sort(key=lambda x: (x["_dist_raw"], x["_best_speed"]), reverse=True)
+    
+        elif ranking_mode == "weighted_distance":
+            rows.sort(key=lambda x: (x["_weighted_dist"], x["_best_speed"]), reverse=True)
+    
+        elif ranking_mode == "speed_points":
+            rows.sort(key=lambda x: (x["_speed_points"], x["_best_speed"]), reverse=True)
+    
+        # ----------------- Platz & Lotterie -----------------
         for i, r in enumerate(rows, start=1):
             r["platz"] = i
             r["lotto"] = platz_lotterie_prozent(i, r["ziel"])
     
+        # ----------------- Session State Update -----------------
         st.session_state["rangliste_rows"] = rows
+
+
+
+
         
         
         
@@ -2192,6 +2752,16 @@ def show_admin_page():
     import os
     import re
     
+    RANKING_MODES = {
+        "Distanz (Standard)": "distance_then_speed",
+        "Nur Distanz": "distance_only",
+        "Nur Geschwindigkeit": "speed_only",
+        "Gewichtete Distanz (Bonus über Vorwoche)": "weighted_distance",
+        "Speed-Punkte (neu)": "speed_points"
+    }
+
+
+    
     GESAMT_WOCHEN = 5  # oder später aus Session/Admin konfigurierbar
     
     ADMIN_USERS = {
@@ -2205,31 +2775,80 @@ def show_admin_page():
     def save_settings(settings):
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=2, ensure_ascii=False)
+
+
     def load_runs():
+        from zoneinfo import ZoneInfo
         if not os.path.exists(RUNS_FILE):
             return {}
     
+        tz = ZoneInfo("Europe/Berlin")  # deine Zeitzone
+    
         try:
             with open(RUNS_FILE, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if not content:
-                    return {}
-                raw = json.loads(content)
-                if isinstance(raw, dict):
-                    # Konvertiere ggf. Strings zu datetime, falls du das brauchst
-                    for user, runs in raw.items():
-                        for run in runs:
-                            if "time" in run and isinstance(run["time"], str):
-                                from datetime import datetime
-                                run["time"] = datetime.fromisoformat(run["time"])
-                    return raw
-                else:
-                    return {}
-        except json.JSONDecodeError:
-            return {}
+                raw = json.load(f)
+                for user, runs in raw.items():
+                    for run in runs:
+                        if "time" in run and isinstance(run["time"], str):
+                            dt = datetime.fromisoformat(run["time"])
+                            # 🔹 falls naive, tzinfo setzen
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=tz)
+                            run["time"] = dt
+                return raw
         except Exception as e:
             st.error(f"Ladefehler für Läufe: {e}")
             return {}
+
+    
+    def extract_exif_metadata(image_bytes):
+                
+        from PIL import Image
+        from PIL.ExifTags import TAGS, GPSTAGS
+        from io import BytesIO
+        from datetime import datetime
+        try:
+            img = Image.open(BytesIO(image_bytes))
+            exif_raw = img._getexif()
+            if not exif_raw:
+                return {}
+    
+            exif = {TAGS.get(k, k): v for k, v in exif_raw.items()}
+    
+            result = {}
+    
+            # 📅 Aufnahmezeit
+            dt_original = exif.get("DateTimeOriginal")
+            if dt_original:
+                result["taken_at"] = datetime.strptime(dt_original, "%Y:%m:%d %H:%M:%S").isoformat()
+    
+            # 📍 GPS
+            gps_info = exif.get("GPSInfo")
+            if gps_info:
+                gps_data = {}
+                for key in gps_info:
+                    decoded = GPSTAGS.get(key, key)
+                    gps_data[decoded] = gps_info[key]
+    
+                def convert(coord):
+                    d, m, s = coord
+                    return float(d) + float(m)/60 + float(s)/3600
+    
+                lat = convert(gps_data["GPSLatitude"])
+                if gps_data.get("GPSLatitudeRef") == "S":
+                    lat = -lat
+    
+                lon = convert(gps_data["GPSLongitude"])
+                if gps_data.get("GPSLongitudeRef") == "W":
+                    lon = -lon
+    
+                result["gps"] = {"lat": lat, "lon": lon}
+    
+            return result
+    
+        except Exception:
+            return {}
+
 
     
     def is_admin():
@@ -2258,30 +2877,107 @@ def show_admin_page():
     def save_runs(runs_by_user):
         import os
         import json
+        from datetime import datetime
     
-        # Ordner sicherstellen
         os.makedirs(os.path.dirname(RUNS_FILE), exist_ok=True)
     
         serializable = {}
+    
         for user, runs in runs_by_user.items():
             serializable[user] = []
+    
             for r in runs:
-                r_copy = r.copy()
-                r_copy["time"] = r_copy["time"].isoformat()
+                r_copy = {}
+    
+                for key, value in r.items():
+                    if key == "time" and isinstance(value, datetime):
+                        r_copy[key] = value.isoformat()
+    
+                    elif key == "proof_image" and isinstance(value, dict):
+                        proof_copy = value.copy()
+    
+                        uploaded_at = proof_copy.get("uploaded_at")
+                        if isinstance(uploaded_at, datetime):
+                            proof_copy["uploaded_at"] = uploaded_at.isoformat()
+    
+                        r_copy["proof_image"] = proof_copy
+    
+                    else:
+                        r_copy[key] = value
+    
                 serializable[user].append(r_copy)
     
         with open(RUNS_FILE, "w", encoding="utf-8") as f:
             json.dump(serializable, f, indent=2, ensure_ascii=False)
+
+    def delete_all_old_proof_images(hours=24):
+        from datetime import datetime, timedelta, timezone
+    
+        runs_by_user = load_runs()
+        now = datetime.now(timezone.utc)
+        deleted_count = 0
+    
+        for user, runs in runs_by_user.items():
+            for run in runs:
+                run_time = run.get("time")
+                if not run_time:
+                    continue
+    
+                # run_time normalisieren
+                if isinstance(run_time, str):
+                    try:
+                        run_dt = datetime.fromisoformat(run_time)
+                    except:
+                        continue
+                elif isinstance(run_time, datetime):
+                    run_dt = run_time
+                else:
+                    continue
+    
+                # Zeitzone auf UTC
+                if run_dt.tzinfo is None:
+                    run_dt = run_dt.replace(tzinfo=timezone.utc)
+                else:
+                    run_dt = run_dt.astimezone(timezone.utc)
+    
+                # Alte Beweisbilder löschen
+                if run.get("proof_image") and (now - run_dt >= timedelta(hours=hours)):
+                    run["proof_image"] = None
+                    deleted_count += 1
+    
+        if deleted_count > 0:
+            save_runs(runs_by_user)
+    
+        return deleted_count
+
+
+
+
+
+
+    
     def get_challenge_start_end():
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Europe/Berlin")
         start = st.session_state.get("CHALLENGE_START_DATETIME")
         end = st.session_state.get("CHALLENGE_END_DATETIME")
+    
         if not start:
-            # Fallback: Montag dieser Woche
-            now = datetime.now()
+            now = datetime.now(tz)
             start = now - timedelta(days=now.weekday())
+            start = start.replace(hour=0, minute=0, second=0, microsecond=0)
         if not end:
             end = start + timedelta(days=6, hours=23, minutes=59, seconds=59)
+        
+        # Alles tz-aware
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=tz)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=tz)
+    
         return start, end
+
     
     def edit_run_form(user, run_index, run, admin=False):
         import base64
@@ -2328,14 +3024,24 @@ def show_admin_page():
             run_entry["dist"] = dist_m
             run_entry["duration"] = total_seconds
             run_entry["comment"] = comment.strip() if comment else ""
-            run_entry["time"] = datetime.now()
+            from zoneinfo import ZoneInfo  # Python 3.9+
+
+            run_entry["time"] = datetime.now(ZoneInfo("Europe/Berlin"))
+
     
             if proof_image is not None:
-                image_b64 = base64.b64encode(proof_image.read()).decode("utf-8")
+                from datetime import timezone
+                image_bytes = proof_image.read()
+                image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+                
+                exif_data = extract_exif_metadata(image_bytes)
+                
                 run_entry["proof_image"] = {
                     "name": proof_image.name,
                     "type": proof_image.type,
-                    "data": image_b64
+                    "data": image_b64,
+                    "uploaded_at": datetime.now(timezone.utc).isoformat(),
+                    "exif": exif_data
                 }
     
             if not admin:
@@ -2387,14 +3093,26 @@ def show_admin_page():
                     minutes = duration // 60
                     seconds = duration % 60
                     admin_confirmed = run.get("admin_confirmed", False)
-    
+                    
+                    from datetime import timedelta
+
+                    display_time = run_time + timedelta(hours=1)
+                    
                     st.markdown(
-                        f"**#{i}** 📅 {run_time.strftime('%d.%m.%Y %H:%M')} "
+                        f"**#{i}** 📅 {display_time.strftime('%d.%m.%Y %H:%M')} "
                         f"📏 **{dist_km:.2f} km** ⏱ **{minutes}:{seconds:02d} min**"
                     )
+                    if run.get("comment", "").strip():
+                        comment = st.text_area(
+                            f"💬 Kommentar",
+                            value=run.get("comment", ""),
+                            max_chars=300,
+                            key=f"comment_{username}_{i}"
+                        )
     
                     # Beweisbild
                     proof = run.get("proof_image")
+                    
                     if proof and "data" in proof:
                         image_bytes = base64.b64decode(proof["data"])
                         st.image(image_bytes, caption=f"Beweisbild – {proof.get('name','')}")
@@ -2469,6 +3187,45 @@ def show_admin_page():
                             """,
                             unsafe_allow_html=True
                         )
+                    # ❌ Lauf löschen
+                    delete_key = f"delete_{username}_{i}"
+                    
+                    if st.button(f"❌ Lauf #{i} löschen", key=delete_key):
+                        runs_by_user[username].pop(i - 1)
+                        save_runs(runs_by_user)
+                    
+                        # Expander offen halten
+                        st.session_state[f"expander_open_{username}"] = True
+                    
+                        # Editierform schließen, falls offen
+                        st.session_state["admin_edit_run_index"] = None
+                        st.session_state["admin_edit_user"] = None
+                    
+                        st.success(f"Lauf #{i} von {username} wurde gelöscht!")
+                    
+                        # sofort neu laden, damit die gelöschte Zeile verschwindet
+                        st.experimental_rerun()
+
+                    if proof and "data" in proof:
+
+                        exif = proof.get("exif", {})
+
+                        if exif:
+                            st.markdown(
+                                "Metadaten"
+                            )
+                            cols = []
+                            
+                            if "taken_at" in exif:
+                                taken = datetime.fromisoformat(exif["taken_at"])
+                                cols.append(f"📅 Aufnahme: {taken.strftime('%d.%m.%Y %H:%M')}")
+                        
+                            gps = exif.get("gps")
+                            if gps:
+                                cols.append(f"📍 Ort: {gps['lat']:.5f}, {gps['lon']:.5f}")
+                        
+                            if cols:
+                                st.caption(" | ".join(cols))
     
                     st.divider()
 
@@ -2529,6 +3286,36 @@ def show_admin_page():
                 max_value=100,
                 value=st.session_state["BATTERIE_SCHWELLE"]
             )
+            
+            #st.markdown("### 🏆 Ranglisten-Modus")
+            
+            current_mode = st.session_state.get(
+                "RANKING_MODE",
+                "distance_then_speed"
+            )
+            
+            # Rückwärts-Mapping für Selectbox
+            mode_label_by_value = {v: k for k, v in RANKING_MODES.items()}
+            
+            selected_label = st.selectbox(
+                "Wie soll die Rangliste berechnet werden?",
+                options=list(RANKING_MODES.keys()),
+                index=list(RANKING_MODES.values()).index(current_mode)
+                if current_mode in RANKING_MODES.values()
+                else 0,
+                help=(
+                    "Legt fest, wie die Platzierung erfolgt.\n\n"
+                    "• Distanz: Gesamtkilometer\n"
+                    "• Geschwindigkeit: schnellster Lauf\n"
+                    "• Gewichtete Distanz: Bonus für Steigerung zur Vorwoche"
+                )
+            )
+            
+            selected_mode = RANKING_MODES[selected_label]
+
+
+
+
     
             info_text = st.text_area(
                 "Admin Infotext",
@@ -2623,6 +3410,7 @@ def show_admin_page():
                 st.session_state["TEAMZIEL_WOCHEN_ERREICHT"] = teamziel_wochen
                 st.session_state["lotterie_preise"] = preise
                 st.session_state["active_users_this_week"] = selected_users
+                st.session_state["RANKING_MODE"] = selected_mode
             
                 save_settings({
                     "WOCHENNUMMER": st.session_state["WOCHENNUMMER"],
@@ -2633,11 +3421,40 @@ def show_admin_page():
                     "TEAMZIEL_WOCHEN_ERREICHT": st.session_state["TEAMZIEL_WOCHEN_ERREICHT"],
                     "admin_info_text": st.session_state["admin_info_text"],
                     "lotterie_preise": st.session_state["lotterie_preise"],
-                    "active_users_this_week": st.session_state["active_users_this_week"]
+                    "active_users_this_week": st.session_state["active_users_this_week"],
+                    "RANKING_MODE": st.session_state["RANKING_MODE"]
                 })
             
                 st.success("✅ Einstellungen gespeichert.")
                 st.rerun()
+            st.markdown("### 🧹 Wartung Beweisbilder")
+
+            with st.expander("⚠️ Alte Beweisbilder löschen (Admin)", expanded=False):
+                st.warning(
+                    "Dieser Vorgang löscht **ALLE Beweisbilder**, "
+                    "die **älter als 24 Stunden** sind – "
+                    "für **alle Nutzer und alle Läufe**.\n\n"
+                    "👉 Laufdaten bleiben vollständig erhalten."
+                )
+            
+                if st.checkbox("Ja, ich möchte fortfahren"):
+                    if st.button("🗑 Alle Beweisbilder > 24h löschen"):
+                        deleted = delete_all_old_proof_images(hours=1)
+            
+                        # Meldung für nächste Seite speichern
+                        if deleted == 0:
+                            st.session_state["delete_msg"] = "ℹ️ Keine löschbaren Beweisbilder gefunden."
+                        else:
+                            st.session_state["delete_msg"] = f"🗑 {deleted} Beweisbilder wurden gelöscht."
+            
+                        st.rerun()
+            
+            # 🟦 Meldung nach Rerun anzeigen
+            if "delete_msg" in st.session_state:
+                st.info(st.session_state["delete_msg"])
+                del st.session_state["delete_msg"]
+
+
                 
 
             def download_file_button(file_path, button_text=None):
@@ -2665,6 +3482,8 @@ def show_admin_page():
             download_file_button("settings.json", "⬇️ Einstellungen herunterladen")
             download_file_button("data/runs_by_user.json", "⬇️ Läufe herunterladen")
             download_file_button("data/users.json", "⬇️ user herunterladen")
+
+        
 
 
     
